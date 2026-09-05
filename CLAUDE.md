@@ -45,6 +45,9 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
 - `channel.remove_conflicts` is the only code that deletes anything; it
   re-validates each path rather than trusting the snapshot it was given.
 - `check_action` returning `False` hides a binding; `None` only dims it.
+- The timeline rebuilds only when the *rows* change, never when their labels
+  do — labels carry relative times and churn every poll. Restore the cursor by
+  option id, not index: the list also holds separators and the divider.
 - The skill's `reference/channel-README.md` is generated from
   `protocol.CHANNEL_README`; a test guards the drift, `inz skill sync` fixes it.
 - `uv run --with pytest pytest -q` to run the suite.

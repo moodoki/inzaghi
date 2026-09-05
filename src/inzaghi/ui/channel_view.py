@@ -10,7 +10,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.binding import Binding
 from textual.widgets import Input, Markdown, OptionList, Static
-from textual.widgets.option_list import Option
+from textual.widgets.option_list import Option, OptionDoesNotExist
 
 from .. import fmt
 from ..channel import Channel
@@ -69,8 +69,12 @@ class ChannelPane(Vertical):
         self._all_rows: list[Row] = []
         self._rows: list[Row] = []
         self._labels: list[str] = []
+        self._signature: list[tuple] = []
         self._divider: tuple[int, int] | None = None
         self._selected: str | None = None
+        #: (key, mtime, size) of what the reader is showing, so an unchanged
+        #: document is never re-rendered and never scrolled back to the top.
+        self._showing: tuple | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="strip", markup=True)
@@ -93,22 +97,49 @@ class ChannelPane(Vertical):
         self.update_strip(now)
 
     def _apply_filter(self) -> None:
-        """Re-render only when the visible rows or their labels actually change.
+        """Update the timeline without disturbing whoever is reading it.
 
-        The poll runs every couple of seconds; rebuilding unconditionally would
-        move the cursor under someone mid-read.
+        Rebuilding the list moves the cursor, so it must happen only when the
+        list actually differs -- which is a question about *which rows exist*,
+        not about how they currently render. Labels embed relative times
+        ("4m ago"), so they change on nearly every poll while the rows behind
+        them are identical; those are written into place instead.
         """
         rows = self.filter.apply(self._all_rows)
         labels = [row.label for row in rows]
+        signature = [(row.key, row.unread, row.kind, row.pinned) for row in rows]
         divider = unread_divider(rows)
-        if (labels, divider) != (self._labels, self._divider):
-            self._rows, self._labels, self._divider = rows, labels, divider
+
+        self._rows = rows
+        if (signature, divider) != (self._signature, self._divider):
+            self._signature, self._divider = signature, divider
+            self._labels = labels
             self._render_rows()
+        elif labels != self._labels:
+            self._retitle(labels)
+
         searched = self.filter.with_kind(ALL).apply(self._all_rows)
         self.query_one("#filterbar", Static).update(filter_bar(searched, self.filter))
 
+    def _retitle(self, labels: list[str]) -> None:
+        """Rewrite changed row labels in place, leaving the cursor alone."""
+        timeline = self.query_one(OptionList)
+        for row, label, previous in zip(self._rows, labels, self._labels):
+            if label == previous:
+                continue
+            try:
+                timeline.replace_option_prompt(row.key, _line(label))
+            except OptionDoesNotExist:
+                self._render_rows()  # the list moved under us; rebuild instead
+                return
+        self._labels = labels
+
     def _render_rows(self) -> None:
         timeline = self.query_one(OptionList)
+        # Read the selection before clearing: emptying and refilling the list
+        # highlights the first row, which fires the handler below and would
+        # otherwise overwrite the very thing being restored.
+        selected = self._selected
         timeline.clear_options()
         options: list[Option] = []
         pinned_done = False
@@ -125,12 +156,20 @@ class ChannelPane(Vertical):
         if not options:
             options.append(Option(Text("no matches", "dim italic"), disabled=True))
         timeline.add_options(options)
-        target = self._index_of(self._selected)
-        if target is None and self._rows:
-            target = 0
-        if target is not None:
-            timeline.highlighted = target
-            self._show(self._rows[target])
+
+        # Restore by key, never by position: the list also holds the pinned/log
+        # rule and the unread divider, so a row's index among the rows is not
+        # its index among the options.
+        row = self._row_for(selected) or (self._rows[0] if self._rows else None)
+        if row is None:
+            self._selected = None
+            return
+        try:
+            timeline.highlighted = timeline.get_option_index(row.key)
+        except OptionDoesNotExist:  # pragma: no cover -- just added it
+            return
+        self._selected = row.key
+        self._show(row)
 
     def update_strip(self, now: datetime) -> None:
         """Refresh only the liveness line, which changes every second."""
@@ -173,8 +212,20 @@ class ChannelPane(Vertical):
                 self.post_message(self.Read(self.channel.key, row.key))
 
     def _show(self, row: Row) -> None:
+        """Put a document in the reader, scrolling only when it is a new one.
+
+        A document that was rewritten while being read is re-rendered in place;
+        jumping back to the top of a status file every time the session
+        refreshes it would make it unreadable.
+        """
+        stamp = (row.key, row.doc.mtime, row.doc.size)
+        if stamp == self._showing:
+            return
+        is_new_document = self._showing is None or self._showing[0] != row.key
+        self._showing = stamp
         self.query_one("#doc", Markdown).update(row.doc.body or _EMPTY)
-        self.query_one("#reader", VerticalScroll).scroll_home(animate=False)
+        if is_new_document:
+            self.query_one("#reader", VerticalScroll).scroll_home(animate=False)
 
     def _row_for(self, key: str) -> Row | None:
         return next((row for row in self._rows if row.key == key), None)
