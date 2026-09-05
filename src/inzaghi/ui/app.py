@@ -13,6 +13,7 @@ from datetime import datetime
 from itertools import count
 
 from textual import on, work
+from textual.worker import get_current_worker
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, TabbedContent, TabPane
@@ -102,21 +103,37 @@ class InzaghiApp(App):
 
     @work(thread=True, exclusive=True, group="scan")
     def rescan(self) -> None:
-        """Re-read every channel off the UI thread."""
+        """Re-read every channel off the UI thread.
+
+        Checks for cancellation between channels so that quitting does not wait
+        for a scan of folders nobody is going to look at. A read already blocked
+        inside the filesystem cannot be interrupted, so exit can still cost the
+        tail of one slow channel -- but not the whole sweep, and the result is
+        never posted back to a screen that has gone away.
+        """
+        worker = get_current_worker()
         now = datetime.now().astimezone()
         scanned: dict[str, Snapshot] = {}
         for channel in self.channels:
+            if worker.is_cancelled:
+                return
             try:
                 scanned[channel.key] = channel.scan(now=now)
             except OSError:
                 continue  # a mount that went away; keep the last good snapshot
+        if worker.is_cancelled:
+            return
         self.call_from_thread(self._apply, scanned, now)
 
     @work(thread=True, exclusive=True, group="discover")
     def rediscover(self) -> None:
         """Look for channels that have appeared or gone since the last pass."""
+        worker = get_current_worker()
         config = self.config.reload()
-        self.call_from_thread(self._sync_channels, config, config.discover())
+        found = config.discover()
+        if worker.is_cancelled:
+            return
+        self.call_from_thread(self._sync_channels, config, found)
 
     async def _sync_channels(self, config: Config, found: list[Channel]) -> None:
         self.config = config
