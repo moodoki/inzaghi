@@ -77,6 +77,19 @@ def test_filter_bar_shows_the_query(rows):
 # -- through the UI -------------------------------------------------------
 
 
+async def search_for(pilot, query: str) -> None:
+    """Open the search box and type into it.
+
+    The pause matters: until the input has focus, the letters are still app
+    bindings -- "s" would send STATUS to the channel rather than filtering it.
+    """
+    await pilot.press("slash")
+    await pilot.pause()
+    for key in query:
+        await pilot.press(key)
+    await pilot.pause()
+
+
 async def open_channel(app, pilot):
     await settle(app, pilot)
     app.query_one("#tabs", TabbedContent).active = "ch0"
@@ -107,6 +120,7 @@ async def test_slash_opens_search_and_typing_filters_live(channel_root):
     async with app.run_test() as pilot:
         pane = await open_channel(app, pilot)
         await pilot.press("slash")
+        await pilot.pause()
         assert app.screen.query_one("#search", Input).display is True
         for key in "shard":
             await pilot.press(key)
@@ -119,7 +133,8 @@ async def test_enter_hides_the_box_but_keeps_the_search(channel_root):
     app = make_app(channel_root)
     async with app.run_test() as pilot:
         pane = await open_channel(app, pilot)
-        await pilot.press("slash", "s", "h", "a", "r", "d", "enter")
+        await search_for(pilot, "shard")
+        await pilot.press("enter")
         await pilot.pause()
         assert app.screen.query_one("#search", Input).display is False
         assert pane.filter.query == "shard"
@@ -130,7 +145,8 @@ async def test_escape_clears_both_filters(channel_root):
     async with app.run_test() as pilot:
         pane = await open_channel(app, pilot)
         await pilot.press("f")
-        await pilot.press("slash", "s", "h", "a", "r", "d", "enter")
+        await search_for(pilot, "shard")
+        await pilot.press("enter")
         await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
@@ -142,10 +158,7 @@ async def test_an_empty_result_does_not_leave_a_stale_selection(channel_root):
     app = make_app(channel_root)
     async with app.run_test() as pilot:
         pane = await open_channel(app, pilot)
-        await pilot.press("slash")
-        for key in "zzzz":
-            await pilot.press(key)
-        await pilot.pause()
+        await search_for(pilot, "zzzz")
         assert pane._rows == []
         assert app.screen.query_one(OptionList).option_count == 1  # the "no matches" line
 

@@ -9,6 +9,7 @@ from conftest import NOW, write
 from inzaghi.state import ReadState
 from inzaghi.ui.channel_view import ChannelPane
 from inzaghi.ui.rows import Row, build_rows, divider_label, unread_divider
+from test_filtering import search_for
 from test_ui import make_app, settle
 
 
@@ -119,6 +120,7 @@ async def test_the_divider_follows_the_active_filter(channel_root, tmp_path):
 
         # Search for something the new entry does not say: nothing unread
         # is visible, so there is no boundary to draw.
-        await pilot.press("slash", "s", "h", "a", "r", "d", "enter")
+        await search_for(pilot, "shard")
+        await pilot.press("enter")
         await settle(app, pilot)
         assert pane._divider is None
