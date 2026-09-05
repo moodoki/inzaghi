@@ -1,0 +1,232 @@
+"""The objects a channel folder is read into."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Literal
+
+from . import parse
+
+Health = Literal["fresh", "late", "stale", "unknown"]
+Direction = Literal["in", "out"]
+
+# How far past its own deadline a session must drift before "late" becomes
+# "probably dead".  Two missed windows: one can be a slow job, two is a pattern.
+_STALE_FACTOR = 2
+
+
+@dataclass(frozen=True, slots=True)
+class Doc:
+    """A whole-file document, parsed as far as it will go."""
+
+    path: Path
+    text: str
+    meta: dict[str, str]
+    body: str
+    mtime: float
+    size: int
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+    @property
+    def title(self) -> str:
+        return parse.first_heading(self.body) or self.path.stem.replace("_", " ").title()
+
+    @classmethod
+    def load(cls, path: Path) -> "Doc":
+        stat = path.stat()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        meta, body = parse.split_front_matter(text)
+        return cls(path=path, text=text, meta=meta, body=body, mtime=stat.st_mtime, size=stat.st_size)
+
+
+@dataclass(frozen=True, slots=True)
+class Heartbeat:
+    """Liveness: when the session last spoke and when it promised to speak next."""
+
+    doc: Doc
+    updated: datetime | None
+    next_by: datetime | None
+    state: str | None
+
+    @classmethod
+    def from_doc(cls, doc: Doc) -> "Heartbeat":
+        bullets = parse.parse_kv_bullets(doc.body)
+        updated = _first_ts(doc.meta.get("updated"), bullets.get("updated"))
+        next_by = _first_ts(
+            doc.meta.get("next_by"),
+            *(v for k, v in bullets.items() if "next update" in k or k == "next"),
+        )
+        state = doc.meta.get("state") or bullets.get("state")
+        return cls(doc=doc, updated=updated, next_by=next_by, state=state)
+
+    @property
+    def interval(self) -> timedelta | None:
+        """The cadence the session set for itself, if it declared both ends."""
+        if self.updated and self.next_by and self.next_by > self.updated:
+            return self.next_by - self.updated
+        return None
+
+    def overdue_by(self, now: datetime) -> timedelta | None:
+        if not self.next_by:
+            return None
+        late = now - self.next_by
+        return late if late > timedelta(0) else None
+
+    def health(self, now: datetime) -> Health:
+        late = self.overdue_by(now)
+        if late is None:
+            return "fresh" if self.next_by else "unknown"
+        interval = self.interval
+        if interval and late > interval * _STALE_FACTOR:
+            return "stale"
+        return "late"
+
+
+@dataclass(frozen=True, slots=True)
+class Status:
+    """The overwritten run-state file, plus whether it is asking for you."""
+
+    doc: Doc
+    updated: datetime | None
+    waiting: str | None
+
+    #: Things a session writes under "Waiting on you" that mean "nothing".
+    NOTHING = frozenset({"", "-", "none", "none.", "nothing", "nothing.", "n/a", "na"})
+
+    @classmethod
+    def from_doc(cls, doc: Doc) -> "Status":
+        updated = _first_ts(doc.meta.get("updated")) or parse.parse_timestamp(doc.body[:400])
+        section = parse.find_section(doc.body, r"waiting on you|needs? you|blocked on you")
+        waiting = None
+        if section is not None:
+            stripped = section.strip()
+            if stripped.lower().strip("*_ ") not in cls.NOTHING:
+                waiting = stripped
+        if doc.meta.get("needs_reply", "").lower() in {"true", "yes", "1"} and not waiting:
+            waiting = section or "(flagged by the session)"
+        return cls(doc=doc, updated=updated, waiting=waiting)
+
+    @property
+    def headline(self) -> str:
+        """First substantive line, for the one-row overview."""
+        for raw in self.doc.body.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith(("*", "_")) and line.endswith(("*", "_")):
+                continue  # an italic metadata line, not the state
+            return line.lstrip("-* ").strip()
+        return ""
+
+
+@dataclass(frozen=True, slots=True)
+class Event:
+    """One immutable entry in the log, in either direction."""
+
+    doc: Doc
+    direction: Direction
+    kind: str
+    slug: str
+    ts: datetime
+    #: For an ack: the message it answers, as a comparison key.
+    ref: str | None = None
+    #: Outbound only: still sitting in inbox/, not yet moved to inbox/done/.
+    in_flight: bool = False
+
+    @property
+    def path(self) -> Path:
+        return self.doc.path
+
+    @property
+    def title(self) -> str:
+        heading = parse.first_heading(self.doc.body)
+        if heading:
+            return heading
+        first = next((l.strip() for l in self.doc.body.splitlines() if l.strip()), "")
+        return first[:120] or self.slug.replace("-", " ")
+
+    @property
+    def key(self) -> str:
+        return parse.normalise_ref(self.doc.path.name)
+
+
+@dataclass(frozen=True, slots=True)
+class Thread:
+    """A message you sent, together with the session's receipt for it."""
+
+    sent: Event
+    ack: Event | None = None
+    #: When the session moved the message to inbox/done/, from the stamp it
+    #: prefixed onto the filename.  Absent while the message is still in flight.
+    picked_up: datetime | None = None
+
+    @property
+    def round_trip(self) -> timedelta | None:
+        """How long the session took to answer.
+
+        ``None`` when the two timestamps disagree about their order -- the send
+        time comes from an mtime that a sync client may have rewritten, and a
+        negative duration is noise, not information.
+        """
+        if self.ack:
+            elapsed = self.ack.ts - self.sent.ts
+            if elapsed >= timedelta(0):
+                return elapsed
+        return None
+
+    @property
+    def state(self) -> Literal["in-flight", "picked-up", "acked"]:
+        if self.ack:
+            return "acked"
+        return "in-flight" if self.sent.in_flight else "picked-up"
+
+
+@dataclass(frozen=True, slots=True)
+class Snapshot:
+    """Everything one scan of a channel folder found."""
+
+    root: Path
+    name: str
+    scanned_at: datetime
+    heartbeat: Heartbeat | None = None
+    status: Status | None = None
+    pinned: dict[str, Doc] = field(default_factory=dict)
+    events: list[Event] = field(default_factory=list)  # inbound, newest first
+    threads: list[Thread] = field(default_factory=list)  # outbound, newest first
+    conflicts: list[Path] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+
+    @property
+    def waiting(self) -> str | None:
+        return self.status.waiting if self.status else None
+
+    @property
+    def in_flight(self) -> list[Thread]:
+        return [t for t in self.threads if t.state != "acked"]
+
+    def health(self, now: datetime | None = None) -> Health:
+        if not self.heartbeat:
+            return "unknown"
+        return self.heartbeat.health(now or self.scanned_at)
+
+    def attention(self, now: datetime | None = None) -> bool:
+        """Does this channel want a human right now?"""
+        return bool(
+            self.waiting
+            or self.health(now) in {"late", "stale"}
+            or any(e.kind in {"hard-stop", "error"} for e in self.events[:5])
+        )
+
+
+def _first_ts(*candidates: str | None) -> datetime | None:
+    for candidate in candidates:
+        if candidate:
+            parsed = parse.parse_timestamp(candidate)
+            if parsed:
+                return parsed
+    return None

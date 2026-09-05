@@ -1,0 +1,34 @@
+# ~/.config/inzaghi/config.toml
+
+# How often to re-read the channel folders, in seconds.  Inzaghi polls rather than
+# watching: a sync client's writes arrive without a local filesystem event.
+poll_seconds = 2.0
+
+# How often to look for channels that have appeared or gone. Costs a listing
+# of each root, so it runs far less often than the file poll; 'r' in the UI
+# forces it immediately.
+discover_seconds = 30.0
+
+# Sync roots. Optional — a config may list channels and nothing else; roots
+# exist only so that channels created later need no edit here.
+# Sync roots.  Any folder beneath one of these that has both notifications/ and
+# inbox/ is picked up as a channel, so a new project needs no edit here.
+[[roots]]
+path = "~/sync/channels"
+depth = 2
+
+# Explicit channels, for folders outside every root, or ones that need a display
+# name or a guard.  read_only makes the viewer work and the composer refuse --
+# the way to follow a live session without any risk of writing to it.
+[[channels]]
+path = "~/sync/channels/northwind"
+name = "northwind"
+read_only = false
+
+[alerts]
+hard_stop = true       # notify when a session stops and asks a question
+error = true           # notify on an unrecoverable error
+heartbeat_late = false # notify when a session misses its own deadline
+waiting = true
+bell = true            # terminal bell alongside the notification
+banner = false         # macOS notification-centre banner

@@ -1,0 +1,320 @@
+"""UI tests, driven headlessly through Textual's pilot."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from shutil import rmtree
+
+import pytest
+from textual.widgets import DataTable, OptionList, TabbedContent, TextArea
+
+from inzaghi.config import ChannelSpec, Config, RootSpec
+from inzaghi.protocol import init_channel
+from inzaghi.ui.app import OVERVIEW_ID, InzaghiApp
+from inzaghi.ui.channel_view import ChannelPane
+from inzaghi.ui.modals import ComposeScreen, ConfirmScreen
+
+
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path, monkeypatch):
+    """Never touch the real ~/.local/state while testing."""
+    monkeypatch.setenv("INZAGHI_STATE_DIR", str(tmp_path / "state"))
+
+
+def make_app(root: Path, *, read_only: bool = False) -> InzaghiApp:
+    config = Config(channels=[ChannelSpec(path=root, name=root.name, read_only=read_only)])
+    return InzaghiApp(config)
+
+
+async def settle(app, pilot):
+    """Let the scan worker finish and its results reach the widgets."""
+    await pilot.pause()
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+async def test_a_tab_and_a_row_per_channel(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert app.query_one(DataTable).row_count == 1
+        assert len(app.query(ChannelPane)) == 1
+        assert app.snapshots[str(channel_root)].events
+
+
+async def test_selecting_a_row_opens_that_channel(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert app.query_one("#tabs", TabbedContent).active == OVERVIEW_ID
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#tabs", TabbedContent).active == "ch0"
+
+
+async def test_timeline_pins_the_live_panels_above_the_log(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        pane = app.query_one(ChannelPane)
+        assert [row.key for row in pane._rows[:3]] == [
+            "pin:STATUS.md",
+            "pin:HEARTBEAT.md",
+            "pin:TASK_OVERVIEW.md",
+        ]
+
+
+async def test_reading_a_row_clears_it_from_unread(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        key = str(channel_root)
+        assert len(app.state.unread(key, app.snapshots[key])) == 2
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        timeline = app.query_one(OptionList)
+        timeline.highlighted = timeline.get_option_index(
+            str(app.snapshots[key].events[0].path)
+        )
+        await pilot.pause()
+        assert len(app.state.unread(key, app.snapshots[key])) == 1
+
+
+async def test_mark_all_read_empties_the_badge(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("a")
+        await pilot.pause()
+        key = str(channel_root)
+        assert app.state.unread(key, app.snapshots[key]) == []
+
+
+async def test_compose_writes_a_message_into_the_inbox(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, ComposeScreen)
+        app.screen.query_one(TextArea).text = "drop to batch 8"
+        await pilot.press("ctrl+s")
+        await settle(app, pilot)
+        sent = list((channel_root / "inbox").glob("*.md"))
+        assert [p.read_text() for p in sent] == ["drop to batch 8\n"]
+
+
+async def test_stop_asks_first_and_cancelling_sends_nothing(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        await pilot.press("n")
+        await settle(app, pilot)
+        assert list((channel_root / "inbox").glob("*.md")) == []
+
+
+async def test_confirming_stop_sends_the_keyword(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+        (sent,) = list((channel_root / "inbox").glob("*.md"))
+        assert sent.read_text() == "STOP\n"
+
+
+async def test_a_read_only_channel_cannot_be_written_from_the_ui(channel_root):
+    """The guard that keeps a live session's folder safe from a dev build."""
+    app = make_app(channel_root, read_only=True)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        for key in ("c", "s", "x"):
+            await pilot.press(key)
+            await pilot.pause()
+            assert not isinstance(app.screen, (ComposeScreen, ConfirmScreen))
+        await settle(app, pilot)
+        assert list((channel_root / "inbox").glob("*.md")) == []
+
+
+# -- discovery while running ---------------------------------------------
+
+
+def root_app(root: Path) -> InzaghiApp:
+    """An app that scans ``root`` for channels, the way the real config does."""
+    return InzaghiApp(Config(roots=[RootSpec(path=root, depth=1)]))
+
+
+async def rediscover(app, pilot):
+    app.rediscover()
+    await settle(app, pilot)
+    await settle(app, pilot)
+
+
+async def test_a_new_channel_appears_without_a_restart(channel_root, tmp_path):
+    app = root_app(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert len(app.query(ChannelPane)) == 1
+
+        init_channel(tmp_path / "southwind")
+        await rediscover(app, pilot)
+
+        assert {c.name for c in app.channels} == {"northwind", "southwind"}
+        assert len(app.query(ChannelPane)) == 2
+        assert app.query_one(DataTable).row_count == 2
+
+
+async def test_a_deleted_channel_loses_its_tab(channel_root, tmp_path):
+    app = root_app(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        init_channel(tmp_path / "southwind")
+        await rediscover(app, pilot)
+
+        rmtree(tmp_path / "southwind")
+        await rediscover(app, pilot)
+
+        assert [c.name for c in app.channels] == ["northwind"]
+        assert len(app.query(ChannelPane)) == 1
+
+
+async def test_an_unmounted_root_does_not_take_the_tabs_with_it(channel_root, tmp_path):
+    """Discovery cannot see the difference; the missing root is the tell."""
+    app = root_app(tmp_path / "volume")
+    (tmp_path / "volume").mkdir()
+    (channel_root).rename(tmp_path / "volume" / "northwind")
+    async with app.run_test() as pilot:
+        await rediscover(app, pilot)
+        assert len(app.query(ChannelPane)) == 1
+
+        (tmp_path / "volume").rename(tmp_path / "volume-gone")  # the disk goes away
+        await rediscover(app, pilot)
+
+        assert [c.name for c in app.channels] == ["northwind"]
+        assert len(app.query(ChannelPane)) == 1
+
+
+async def test_refresh_binding_picks_up_a_new_channel(channel_root, tmp_path):
+    app = root_app(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        init_channel(tmp_path / "southwind")
+        await pilot.press("r")
+        await settle(app, pilot)
+        await settle(app, pilot)
+        assert len(app.query(ChannelPane)) == 2
+
+
+async def test_flipping_read_only_in_the_config_takes_effect(channel_root, tmp_path, monkeypatch):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        f'[[channels]]\npath = "{channel_root}"\nname = "northwind"\nread_only = true\n'
+    )
+    monkeypatch.setenv("INZAGHI_CONFIG", str(config_file))
+    app = InzaghiApp(Config.load(config_file))
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert app.channels[0].read_only is True
+
+        config_file.write_text(
+            f'[[channels]]\npath = "{channel_root}"\nname = "northwind"\nread_only = false\n'
+        )
+        await rediscover(app, pilot)
+        assert app.channels[0].read_only is False
+
+
+async def test_a_broken_config_is_ignored_rather_than_emptying_the_app(channel_root, tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(f'[[channels]]\npath = "{channel_root}"\n')
+    app = InzaghiApp(Config.load(config_file))
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        config_file.write_text("[[channels]\npath = broken")
+        await rediscover(app, pilot)
+        assert len(app.query(ChannelPane)) == 1
+
+
+def test_the_cli_reports_the_name_it_was_invoked_as(monkeypatch):
+    """Both `inzaghi` and the `inz` alias should quote themselves in usage."""
+    from inzaghi import cli
+
+    monkeypatch.setattr(cli.sys, "argv", ["inz", "ls"])
+    assert cli._prog() == "inz"
+    monkeypatch.setattr(cli.sys, "argv", ["/usr/local/bin/inzaghi"])
+    assert cli._prog() == "inzaghi"
+
+
+def test_module_invocation_falls_back_to_the_full_name(monkeypatch):
+    from inzaghi import cli
+
+    monkeypatch.setattr(cli.sys, "argv", ["__main__.py"])
+    assert cli._prog() == "inzaghi"
+
+
+# -- a config with no roots at all ---------------------------------------
+
+
+def channels_only_app(*roots_of_channels: Path) -> InzaghiApp:
+    """The config shape someone writes when they just list their projects."""
+    return InzaghiApp(
+        Config(channels=[ChannelSpec(path=p, name=p.name) for p in roots_of_channels])
+    )
+
+
+async def test_channels_work_with_no_roots_configured(channel_root, tmp_path):
+    second = init_channel(tmp_path / "southwind").channel.root
+    app = channels_only_app(channel_root, second)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert {c.name for c in app.channels} == {"northwind", "southwind"}
+        assert app.query_one(DataTable).row_count == 2
+
+
+async def test_an_explicit_channel_survives_its_volume_going_away(channel_root, tmp_path):
+    """The unmount guard must cover listed channels, not only scanned roots."""
+    volume = tmp_path / "volume"
+    volume.mkdir()
+    second = init_channel(volume / "southwind").channel.root
+    app = channels_only_app(channel_root, second)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert len(app.query(ChannelPane)) == 2
+
+        volume.rename(tmp_path / "volume-gone")  # the disk holding one of them
+        await rediscover(app, pilot)
+
+        assert {c.name for c in app.channels} == {"northwind", "southwind"}
+
+
+async def test_a_genuinely_deleted_explicit_channel_is_dropped(channel_root, tmp_path):
+    second = init_channel(tmp_path / "southwind").channel.root
+    app = channels_only_app(channel_root, second)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        rmtree(second)
+        await rediscover(app, pilot)
+        assert [c.name for c in app.channels] == ["northwind"]
+
+
+async def test_a_half_synced_channel_keeps_its_tab(channel_root, tmp_path):
+    """Present but incomplete reads as mid-sync, not as deleted."""
+    second = init_channel(tmp_path / "southwind").channel.root
+    app = channels_only_app(channel_root, second)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        rmtree(second / "notifications")
+        await rediscover(app, pilot)
+        assert len(app.channels) == 2

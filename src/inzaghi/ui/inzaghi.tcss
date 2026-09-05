@@ -1,0 +1,140 @@
+/* Inzaghi. Restrained on purpose: this screen is left open for hours, so colour
+   is reserved for the two things that ever need to shout -- liveness and a
+   question waiting on you. */
+
+Screen {
+    background: $surface;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+/* -- overview ---------------------------------------------------------- */
+
+OverviewPane {
+    padding: 1 2;
+}
+
+#overview-summary {
+    padding: 0 0 1 0;
+    color: $text-muted;
+}
+
+#overview-table {
+    height: auto;
+    max-height: 100%;
+    overflow-x: hidden;
+}
+
+/* -- channel ----------------------------------------------------------- */
+
+ChannelPane {
+    height: 1fr;
+}
+
+#strip {
+    padding: 0 2;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    height: auto;
+    min-height: 1;
+    border-bottom: solid $panel;
+    background: $boost;
+}
+
+#filterbar {
+    padding: 0 2;
+    height: 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#search {
+    margin: 0 2;
+    height: 3;
+}
+
+#channel-body {
+    height: 1fr;
+}
+
+#timeline {
+    /* A list of one-line entries: clip long titles rather than reflow them,
+       so every row stays on the same grid. */
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    width: 46%;
+    min-width: 34;
+    height: 1fr;
+    border: none;
+    border-right: solid $panel;
+    padding: 0 1;
+    background: $surface;
+}
+
+#timeline > .option-list--option-highlighted {
+    background: $primary-darken-2;
+}
+
+#reader {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 2;
+    scrollbar-size-vertical: 1;
+}
+
+/* -- modals ------------------------------------------------------------ */
+
+ComposeScreen, ConfirmScreen {
+    align: center middle;
+}
+
+#compose-box {
+    width: 84;
+    max-width: 90%;
+    height: auto;
+    padding: 1 2;
+    border: thick $primary;
+    background: $surface;
+}
+
+#compose-title {
+    text-style: bold;
+}
+
+#compose-due {
+    padding: 0 0 1 0;
+}
+
+#compose-text {
+    height: 12;
+    margin-bottom: 1;
+}
+
+#compose-buttons, #confirm-buttons {
+    height: auto;
+    align-horizontal: right;
+}
+
+#compose-buttons Button, #confirm-buttons Button {
+    margin-left: 2;
+}
+
+#confirm-box {
+    width: 68;
+    max-width: 90%;
+    height: auto;
+    padding: 1 2;
+    border: thick $error;
+    background: $surface;
+}
+
+#confirm-question {
+    text-style: bold;
+    padding-bottom: 1;
+}
+
+#confirm-detail {
+    padding-bottom: 1;
+}
