@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from shutil import rmtree
 
-import pytest
 from textual.widgets import DataTable, OptionList, TabbedContent, TextArea
 
 from inzaghi.config import ChannelSpec, Config, RootSpec
@@ -14,12 +13,6 @@ from inzaghi.ui.app import OVERVIEW_ID, InzaghiApp
 from inzaghi.ui.channel_view import ChannelPane
 from inzaghi.ui.composer import Composer
 from inzaghi.ui.modals import ConfirmScreen
-
-
-@pytest.fixture(autouse=True)
-def isolated_state(tmp_path, monkeypatch):
-    """Never touch the real ~/.local/state while testing."""
-    monkeypatch.setenv("INZAGHI_STATE_DIR", str(tmp_path / "state"))
 
 
 def make_app(root: Path, *, read_only: bool = False) -> InzaghiApp:

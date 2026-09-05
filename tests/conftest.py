@@ -23,6 +23,18 @@ def write(path: Path, text: str, *, mtime: datetime | None = None) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path, monkeypatch):
+    """Never touch the real ~/.local/state or ~/.config while testing.
+
+    Lives here rather than beside the UI tests: anything that builds an
+    InzaghiApp loads and saves read receipts, and a fixture in one module does
+    not cover the others that do it.
+    """
+    monkeypatch.setenv("INZAGHI_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("INZAGHI_CONFIG", str(tmp_path / "config" / "inzaghi.toml"))
+
+
 @pytest.fixture
 def channel_root(tmp_path: Path) -> Path:
     """A channel with a heartbeat, a status, a log, and one answered message."""
