@@ -7,6 +7,11 @@ synced folder and reads instructions back out of one. Inzaghi is the other end o
 that link: an overview of every channel at once, tabs for the ones you are
 following, and a composer for sending the session its next instruction.
 
+A session's heartbeat has to cross a sync client to reach you, so a deadline
+that has only just passed usually means the update is in flight. Inzaghi allows
+`heartbeat_grace_seconds` (60 by default) before calling a channel late. The
+countdown always shows the real time; only the verdict — and the alert — waits.
+
 It is not a chat client. Sessions wake on their own schedule — half an hour is
 typical — so the questions Inzaghi is built to answer are *is it alive*, *when will
 it speak next*, *does it need me*, and *has it seen what I sent*.

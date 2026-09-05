@@ -16,6 +16,11 @@ Direction = Literal["in", "out"]
 # "probably dead".  Two missed windows: one can be a slow job, two is a pattern.
 _STALE_FACTOR = 2
 
+#: Default slack allowed past a promised update before calling it late. The
+#: heartbeat has to cross a sync client to reach us, so a deadline that has just
+#: passed usually means the file is still in flight, not that anything is wrong.
+DEFAULT_GRACE = timedelta(seconds=60)
+
 
 @dataclass(frozen=True, slots=True)
 class Doc:
@@ -77,10 +82,17 @@ class Heartbeat:
         late = now - self.next_by
         return late if late > timedelta(0) else None
 
-    def health(self, now: datetime) -> Health:
-        late = self.overdue_by(now)
-        if late is None:
-            return "fresh" if self.next_by else "unknown"
+    def health(self, now: datetime, grace: timedelta = DEFAULT_GRACE) -> Health:
+        """Liveness, allowing ``grace`` for the update to make it across the sync.
+
+        ``overdue_by`` stays truthful -- the countdown should say what the clock
+        says. Only the judgement of whether that is a problem is softened.
+        """
+        if not self.next_by:
+            return "unknown"
+        late = now - self.next_by
+        if late <= grace:
+            return "fresh"
         interval = self.interval
         if interval and late > interval * _STALE_FACTOR:
             return "stale"
@@ -200,6 +212,8 @@ class Snapshot:
     threads: list[Thread] = field(default_factory=list)  # outbound, newest first
     conflicts: list[Path] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    #: Slack allowed past a promised heartbeat before it counts as late.
+    grace: timedelta = DEFAULT_GRACE
 
     @property
     def waiting(self) -> str | None:
@@ -212,7 +226,7 @@ class Snapshot:
     def health(self, now: datetime | None = None) -> Health:
         if not self.heartbeat:
             return "unknown"
-        return self.heartbeat.health(now or self.scanned_at)
+        return self.heartbeat.health(now or self.scanned_at, self.grace)
 
     def attention(self, now: datetime | None = None) -> bool:
         """Does this channel want a human right now?"""

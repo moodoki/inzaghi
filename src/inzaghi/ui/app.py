@@ -222,7 +222,10 @@ class InzaghiApp(App):
 
         health = snapshot.health(now)
         was = self._known_health.get(key)
-        if was in {"fresh", None} and health in {"late", "stale"} and self.config.alerts.heartbeat_late:
+        # Only a transition is news. A channel that was already late when
+        # Inzaghi opened is backlog, the same as the events above -- it is
+        # visible in the overview without a popup demanding attention.
+        if was == "fresh" and health in {"late", "stale"} and self.config.alerts.heartbeat_late:
             self._shout(f"{snapshot.name}: no heartbeat since its deadline", severity="warning")
         self._known_health[key] = health
 

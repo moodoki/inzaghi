@@ -9,6 +9,12 @@ poll_seconds = 2.0
 # forces it immediately.
 discover_seconds = 30.0
 
+# Slack allowed past a session's promised heartbeat before it counts as late.
+# The file has to cross a sync client to reach you, so a deadline that has just
+# passed usually means the update is still in flight rather than that anything
+# is wrong. The countdown still shows the true time; only the verdict waits.
+heartbeat_grace_seconds = 60.0
+
 # Sync roots. Optional — a config may list channels and nothing else; roots
 # exist only so that channels created later need no edit here.
 # Sync roots.  Any folder beneath one of these that has both notifications/ and

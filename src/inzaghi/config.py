@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import tomllib
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 
 from .channel import Channel, is_channel
@@ -20,6 +21,8 @@ DEFAULT_POLL_SECONDS = 2.0
 #: the file poll.  New channels are rare; new files are not.
 DEFAULT_DISCOVER_SECONDS = 30.0
 DEFAULT_SCAN_DEPTH = 2
+#: Seconds of slack past a promised heartbeat before calling it late.
+DEFAULT_HEARTBEAT_GRACE = 60.0
 
 
 def config_path() -> Path:
@@ -68,6 +71,7 @@ class Config:
     channels: list[ChannelSpec] = field(default_factory=list)
     poll_seconds: float = DEFAULT_POLL_SECONDS
     discover_seconds: float = DEFAULT_DISCOVER_SECONDS
+    heartbeat_grace_seconds: float = DEFAULT_HEARTBEAT_GRACE
     alerts: Alerts = field(default_factory=Alerts)
     #: Where this config came from, or None for one built in memory.
     source: Path | None = None
@@ -104,6 +108,9 @@ class Config:
             ],
             poll_seconds=float(raw.get("poll_seconds", DEFAULT_POLL_SECONDS)),
             discover_seconds=float(raw.get("discover_seconds", DEFAULT_DISCOVER_SECONDS)),
+            heartbeat_grace_seconds=float(
+                raw.get("heartbeat_grace_seconds", DEFAULT_HEARTBEAT_GRACE)
+            ),
             alerts=Alerts(**{k: bool(v) for k, v in raw.get("alerts", {}).items()}),
             source=path,
             loaded=True,
@@ -128,14 +135,17 @@ class Config:
         Order is by display name so tabs do not reshuffle when a folder's mtime
         changes underneath us.
         """
+        grace = timedelta(seconds=self.heartbeat_grace_seconds)
         found: dict[Path, Channel] = {}
         for root in self.roots:
             for path in scan_root(root.path, root.depth):
-                found[path] = Channel(root=path, read_only=root.read_only)
+                found[path] = Channel(root=path, read_only=root.read_only, grace=grace)
         for spec in self.channels:
             path = spec.path.expanduser()
             if is_channel(path):
-                found[path] = Channel(root=path, name=spec.name, read_only=spec.read_only)
+                found[path] = Channel(
+                    root=path, name=spec.name, read_only=spec.read_only, grace=grace
+                )
         return sorted(found.values(), key=lambda c: c.name.lower())
 
 

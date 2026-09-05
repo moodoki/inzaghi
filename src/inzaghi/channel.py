@@ -17,13 +17,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from collections.abc import Iterable
 
 from . import parse
-from .model import Doc, Event, Heartbeat, Snapshot, Status, Thread
+from .model import DEFAULT_GRACE, Doc, Event, Heartbeat, Snapshot, Status, Thread
 
 NOTIFICATIONS = "notifications"
 INBOX = "inbox"
@@ -64,6 +64,8 @@ class Channel:
     #: Refuse every write.  Set for channels a live session owns while we are
     #: still developing against them.
     read_only: bool = False
+    #: Slack allowed past a promised heartbeat before it counts as late.
+    grace: timedelta = DEFAULT_GRACE
     _cache: dict[Path, tuple[float, int, Doc]] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
@@ -159,6 +161,7 @@ class Channel:
             threads=_weave(outbound, events),
             conflicts=conflicts,
             problems=problems,
+            grace=self.grace,
         )
 
     def _scan_outbound(self, conflicts: list[Path], problems: list[str]) -> list[Event]:
