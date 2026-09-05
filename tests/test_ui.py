@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 from shutil import rmtree
@@ -147,6 +148,66 @@ async def test_a_read_only_channel_cannot_be_written_from_the_ui(channel_root):
             assert app.screen.query_one(Composer).display is False
         await settle(app, pilot)
         assert list((channel_root / "inbox").glob("*.md")) == []
+
+
+# -- pruning read receipts ------------------------------------------------
+
+
+def seed_receipts(tmp_path: Path, *channel_keys: str) -> Path:
+    """A read.json already holding a receipt for each of ``channel_keys``."""
+    path = tmp_path / "state" / "read.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    seen = {key: {f"{key}/notifications/read.md": "1:1"} for key in channel_keys}
+    path.write_text(json.dumps({"version": 1, "seen": seen}), encoding="utf-8")
+    return path
+
+
+async def test_receipts_for_channels_the_config_ignores_are_forgotten(channel_root, tmp_path):
+    stranger = "/somewhere/else/entirely"
+    seed_receipts(tmp_path, str(channel_root), stranger)
+    app = root_app(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert str(channel_root) in app.state.seen
+        assert stranger not in app.state.seen
+    assert stranger not in json.loads((tmp_path / "state" / "read.json").read_text())["seen"]
+
+
+async def test_an_unmounted_channel_keeps_its_receipts(channel_root, tmp_path):
+    """Nothing under a watched root is forgotten for merely not being there."""
+    absent = str(tmp_path / "southwind")          # configured for, not on disk
+    seed_receipts(tmp_path, absent)
+    app = root_app(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await rediscover(app, pilot)
+        assert absent in app.state.seen
+
+
+async def test_a_config_that_names_nothing_forgets_nothing(channel_root, tmp_path):
+    """An empty config is one being written, not a decision to forget."""
+    seed_receipts(tmp_path, str(channel_root), "/somewhere/else")
+    app = InzaghiApp(Config())
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert set(app.state.seen) == {str(channel_root), "/somewhere/else"}
+
+
+async def test_a_deleted_channel_loses_its_receipts(channel_root, tmp_path):
+    """Gone from a volume we could see at the time -- that absence is believable."""
+    seed_receipts(tmp_path, str(channel_root))
+    app = root_app(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        init_channel(tmp_path / "southwind")
+        await rediscover(app, pilot)
+        app.state.seen[str(tmp_path / "southwind")] = {"whatever.md": "1:1"}
+
+        rmtree(tmp_path / "southwind")
+        await rediscover(app, pilot)
+
+        assert str(tmp_path / "southwind") not in app.state.seen
+        assert str(channel_root) in app.state.seen  # the survivor is untouched
 
 
 # -- nothing slow on the UI thread ----------------------------------------

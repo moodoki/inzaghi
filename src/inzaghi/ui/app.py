@@ -11,6 +11,7 @@ from __future__ import annotations
 import subprocess
 from datetime import datetime
 from itertools import count
+from pathlib import Path
 
 from textual import on, work
 from textual.worker import get_current_worker
@@ -82,6 +83,7 @@ class InzaghiApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.prune_receipts(self.config, set())
         self.rescan()
         self.set_interval(self.config.poll_seconds, self.rescan)
         self.set_interval(self.config.discover_seconds, self.rediscover)
@@ -169,7 +171,27 @@ class InzaghiApp(App):
                 existing.name = channel.name
                 existing.read_only = channel.read_only
 
+        self.prune_receipts(config, gone)
         self.rescan()
+
+    def prune_receipts(self, config: Config, gone: set[str]) -> None:
+        """Forget read receipts for channels nobody can use again.
+
+        Two things make a channel's receipts dead weight: this config no longer
+        points anywhere near it, or it was deleted from a volume we could see
+        at the time. Neither question is put to the channel's own folder -- a
+        synced folder is allowed to be absent, half-there or an hour behind,
+        and none of that is evidence about anything.
+        """
+        for key in gone:
+            self.state.forget(key)
+        # A config naming nothing would condemn every channel at once. That is
+        # a config being written, or one that has not been written yet, not a
+        # decision to forget anything.
+        if config.roots or config.channels:
+            for key in [k for k in self.state.seen if not config.watches(Path(k))]:
+                self.state.forget(key)
+        self.state.save()
 
     async def _add_channel(self, tabs: TabbedContent, channel: Channel) -> None:
         self.channels.append(channel)

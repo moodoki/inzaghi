@@ -48,6 +48,10 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   redrawing. `tests/test_ui.py` asserts the thread, not the timing.
 - `channel.remove_conflicts` is the only code that deletes anything; it
   re-validates each path rather than trusting the snapshot it was given.
+- Read receipts are forgotten a whole channel at a time, and only on evidence
+  from outside the channel: the config no longer watching it, or an absence
+  `absence_is_real` will vouch for. Never per file -- a notification missing
+  from one scan of a synced folder is late at least as often as it is gone.
 - `check_action` returning `False` hides a binding; `None` only dims it.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by

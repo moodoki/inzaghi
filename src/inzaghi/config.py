@@ -129,6 +129,28 @@ class Config:
         except (OSError, ValueError):
             return self
 
+    def watches(self, path: Path) -> bool:
+        """Whether this config would look at ``path``, mounted or not.
+
+        Asked of a stored read receipt rather than of a folder on disk, so it
+        is deliberately pure path arithmetic: a channel on a volume that is not
+        mounted right now is still one we watch, and must keep its receipts.
+        """
+        path = Path(path).expanduser()
+        if any(spec.path.expanduser() == path for spec in self.channels):
+            return True
+        for root in self.roots:
+            base = root.path.expanduser()
+            if path == base:
+                return True
+            try:
+                inside = path.relative_to(base)
+            except ValueError:
+                continue
+            if len(inside.parts) <= root.depth:
+                return True
+        return False
+
     def discover(self) -> list[Channel]:
         """All channels, explicit entries taking precedence over scanned ones.
 

@@ -65,14 +65,18 @@ class ReadState:
     def unread(self, channel_key: str, snapshot: Snapshot) -> list[Event]:
         return [e for e in snapshot.events if not self.is_read(channel_key, e)]
 
-    def forget_missing(self, channel_key: str, snapshot: Snapshot) -> None:
-        """Drop receipts for files that no longer exist, so the file stays small."""
-        entry = self.seen.get(channel_key)
-        if not entry:
-            return
-        live = {str(e.path) for e in snapshot.events}
-        for stale in [p for p in entry if p not in live]:
-            del entry[stale]
+    def forget(self, channel_key: str) -> None:
+        """Drop a whole channel's receipts, so the file does not grow forever.
+
+        Deliberately whole-channel. A receipt is keyed by path *and* content
+        signature, so one pointing at a file that is not there costs a line and
+        resurrects correctly if the file comes back -- whereas a notification
+        missing from one scan of a synced folder is not evidence that it is
+        gone, and dropping its receipt would make something already read
+        reappear as new. Which channels to forget is decided in the app, from
+        the config and from an absence that has been corroborated.
+        """
+        if self.seen.pop(channel_key, None) is not None:
             self._dirty = True
 
 
