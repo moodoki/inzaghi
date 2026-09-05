@@ -88,24 +88,6 @@ class Channel:
     def done_dir(self) -> Path:
         return self.inbox_dir / DONE
 
-    def fingerprint(self) -> tuple[tuple[str, float, int], ...]:
-        """Cheap signature of the folder, for change detection between polls.
-
-        Stats only -- no file bodies -- so it stays affordable at a 2-second
-        poll on a network volume.
-        """
-        entries: list[tuple[str, float, int]] = []
-        for directory in (self.notifications_dir, self.inbox_dir, self.done_dir):
-            try:
-                for entry in directory.iterdir():
-                    if entry.name.startswith(".") or entry.is_dir():
-                        continue
-                    stat = entry.stat()
-                    entries.append((str(entry), stat.st_mtime, stat.st_size))
-            except OSError:
-                continue
-        return tuple(sorted(entries))
-
     def _doc(self, path: Path) -> Doc | None:
         """Load a document, reusing the cached parse when it has not changed."""
         try:

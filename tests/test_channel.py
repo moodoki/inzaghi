@@ -106,13 +106,6 @@ def test_rescan_reuses_cached_documents(channel):
     assert channel.scan(now=NOW).events[0].doc is doc
 
 
-def test_fingerprint_changes_only_when_the_folder_does(channel, channel_root):
-    before = channel.fingerprint()
-    assert channel.fingerprint() == before
-    write(channel_root / "inbox" / "2026-09-05_0600_pause.md", "PAUSE\n")
-    assert channel.fingerprint() != before
-
-
 def test_discovery_finds_channels_under_a_root(channel_root, tmp_path):
     (tmp_path / "not_a_channel").mkdir()
     assert is_channel(channel_root)
