@@ -42,6 +42,10 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
 - Parsers degrade to `None`; a session that drifts from the format makes one
   widget go quiet rather than crashing the app.
 - Every write into a channel goes through `compose._atomic_write`.
+- Nothing that touches a channel's volume runs on the UI thread -- scanning,
+  deciding an absence, sending, deleting conflicts. That volume belongs to a
+  sync client and answers when it likes; a call that waits on it stops the app
+  redrawing. `tests/test_ui.py` asserts the thread, not the timing.
 - `channel.remove_conflicts` is the only code that deletes anything; it
   re-validates each path rather than trusting the snapshot it was given.
 - `check_action` returning `False` hides a binding; `None` only dims it.

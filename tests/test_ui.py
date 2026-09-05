@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from shutil import rmtree
+from unittest import mock
 
 from textual.widgets import DataTable, OptionList, TabbedContent, TextArea
 
+from inzaghi import channel as channel_module
+from inzaghi import compose as composer_module
 from inzaghi.config import ChannelSpec, Config, RootSpec
 from inzaghi.protocol import init_channel
 from inzaghi.ui.app import OVERVIEW_ID, InzaghiApp
@@ -143,6 +147,90 @@ async def test_a_read_only_channel_cannot_be_written_from_the_ui(channel_root):
             assert app.screen.query_one(Composer).display is False
         await settle(app, pilot)
         assert list((channel_root / "inbox").glob("*.md")) == []
+
+
+# -- nothing slow on the UI thread ----------------------------------------
+#
+# The volume behind a channel belongs to a sync client, and it answers when it
+# feels like it. Every call that can wait on it has to happen in a worker, or
+# the whole app stops redrawing until it returns.
+
+
+async def test_believing_an_absence_never_blocks_the_ui(channel_root, tmp_path):
+    """The stat that decides a channel is gone asks the volume that went quiet."""
+    app = root_app(tmp_path)
+    callers: list[int] = []
+
+    def watched(path):
+        callers.append(threading.get_ident())
+        return False
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        ui_thread = threading.get_ident()
+        with mock.patch("inzaghi.ui.app.absence_is_real", watched):
+            # A wedged volume looks exactly like this: discovery finds nothing.
+            with mock.patch.object(Config, "discover", lambda self: []):
+                await rediscover(app, pilot)
+
+    assert callers, "the absence was never checked"
+    assert ui_thread not in callers
+
+
+async def test_sending_never_blocks_the_ui(channel_root):
+    """compose.send writes into the synced folder and fsyncs it."""
+    app = make_app(channel_root)
+    callers: list[int] = []
+    real_send = composer_module.send
+
+    def watched(*args, **kwargs):
+        callers.append(threading.get_ident())
+        return real_send(*args, **kwargs)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        ui_thread = threading.get_ident()
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        with mock.patch("inzaghi.ui.app.composer.send", watched):
+            await pilot.press("c")
+            await pilot.pause()
+            app.screen.query_one(Composer).query_one(TextArea).text = "rerun shard 4"
+            await pilot.press("ctrl+s")
+            await settle(app, pilot)
+
+    assert callers, "nothing was sent"
+    assert ui_thread not in callers
+    (sent,) = list((channel_root / "inbox").glob("*.md"))
+    assert sent.read_text() == "rerun shard 4\n"
+
+
+async def test_cleaning_conflicts_never_blocks_the_ui(channel_root):
+    """Deleting a sync client's leftovers is I/O on that client's own volume."""
+    conflict = channel_root / "notifications" / "STATUS (conflicted copy 2026-09-05).md"
+    conflict.write_text("stale\n", encoding="utf-8")
+    app = make_app(channel_root)
+    callers: list[int] = []
+    real_remove = channel_module.remove_conflicts
+
+    def watched(*args, **kwargs):
+        callers.append(threading.get_ident())
+        return real_remove(*args, **kwargs)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        ui_thread = threading.get_ident()
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        with mock.patch("inzaghi.ui.app.remove_conflicts", watched):
+            await pilot.press("k")
+            await pilot.pause()
+            await pilot.press("y")
+            await settle(app, pilot)
+
+    assert callers, "nothing was cleaned"
+    assert ui_thread not in callers
+    assert not conflict.exists()
 
 
 # -- discovery while running ---------------------------------------------

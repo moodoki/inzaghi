@@ -133,18 +133,31 @@ class InzaghiApp(App):
         found = config.discover()
         if worker.is_cancelled:
             return
-        self.call_from_thread(self._sync_channels, config, found)
+        # Believing an absence means stat-ing the channel's own folder -- and a
+        # channel drops out of discovery precisely when its volume has stopped
+        # answering, so that is the one call most likely to block. Ask it here,
+        # beside the scan, for the same reason the scan is here.
+        present = {channel.key for channel in found}
+        gone = {
+            channel.key
+            for channel in list(self.channels)
+            if channel.key not in present and absence_is_real(channel.root)
+        }
+        if worker.is_cancelled:
+            return
+        self.call_from_thread(self._sync_channels, config, found, gone)
 
-    async def _sync_channels(self, config: Config, found: list[Channel]) -> None:
+    async def _sync_channels(
+        self, config: Config, found: list[Channel], gone: set[str]
+    ) -> None:
         self.config = config
-        by_key = {channel.key: channel for channel in found}
         tabs = self.query_one("#tabs", TabbedContent)
 
         # An absent channel means "deleted" only when its absence can be
-        # believed; an unmounted volume must not take the tabs with it.
-        for channel in [c for c in self.channels if c.key not in by_key]:
-            if absence_is_real(channel.root):
-                await self._drop_channel(tabs, channel)
+        # believed; an unmounted volume must not take the tabs with it. That
+        # judgement is made in the worker above, where it is allowed to block.
+        for channel in [c for c in self.channels if c.key in gone]:
+            await self._drop_channel(tabs, channel)
 
         for channel in found:
             existing = next((c for c in self.channels if c.key == channel.key), None)
@@ -252,7 +265,12 @@ class InzaghiApp(App):
         if self.config.alerts.bell:
             self.bell()
         if self.config.alerts.banner:
-            _banner(message)
+            self._raise_banner(message)
+
+    @work(thread=True, group="banner")
+    def _raise_banner(self, message: str) -> None:
+        """osascript is a process launch, and slow enough to be felt."""
+        _banner(message)
 
     # -- navigation -------------------------------------------------------
 
@@ -357,12 +375,16 @@ class InzaghiApp(App):
             lambda ok: self._clean(channel, conflicts) if ok else None,
         )
 
+    @work(thread=True, group="write")
     def _clean(self, channel: Channel, conflicts: list) -> None:
         try:
             removed, problems = remove_conflicts(channel, conflicts)
         except ReadOnlyChannel as exc:
-            self.notify(str(exc), severity="warning")
+            self.call_from_thread(self.notify, str(exc), severity="warning")
             return
+        self.call_from_thread(self._cleaned, removed, problems)
+
+    def _cleaned(self, removed: list, problems: list[str]) -> None:
         if removed:
             self.notify(f"Deleted {len(removed)} conflict {'copy' if len(removed) == 1 else 'copies'}")
         for problem in problems:
@@ -392,8 +414,9 @@ class InzaghiApp(App):
         pane = self._pane_for(event.channel_key)
         if channel is None or pane is None or not self._writable(channel):
             return
-        if self._write(channel, lambda: composer.send(channel, event.text)) is not None:
-            pane.close_composer()  # a failed send keeps the draft to retry
+        # The composer closes from the worker's callback, so a failed send
+        # still keeps the draft to retry.
+        self._write(channel, lambda: composer.send(channel, event.text), sent=pane.close_composer)
 
     def action_quick(self, keyword: str) -> None:
         channel = self.current_channel()
@@ -418,16 +441,27 @@ class InzaghiApp(App):
     def _send_quick(self, channel: Channel, action: QuickAction) -> None:
         self._write(channel, lambda: composer.send_quick(channel, action))
 
-    def _write(self, channel: Channel, write):
-        """Perform a write, reporting either way. Returns the path, or None."""
+    @work(thread=True, group="write")
+    def _write(self, channel: Channel, write, sent=None) -> None:
+        """Perform a write off the UI thread, reporting either way.
+
+        The target is a folder a sync client owns and ``_atomic_write`` fsyncs
+        it, so a send can wait on whatever that client is doing. Not a reason
+        for the rest of the app to stop redrawing. Never ``exclusive``: two
+        messages sent in quick succession must both arrive.
+        """
         try:
             path = write()
         except (ReadOnlyChannel, OSError, ValueError) as exc:
-            self.notify(str(exc), severity="error", timeout=20)
-            return None
+            self.call_from_thread(self.notify, str(exc), severity="error", timeout=20)
+            return
+        self.call_from_thread(self._wrote, channel, path, sent)
+
+    def _wrote(self, channel: Channel, path, sent) -> None:
         self.notify(f"Sent to {channel.name}: {path.name}")
+        if sent is not None:
+            sent()
         self.rescan()
-        return path
 
     def _writable(self, channel: Channel) -> bool:
         if channel.read_only:
