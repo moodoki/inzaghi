@@ -1,5 +1,22 @@
 # Inzaghi
 
+```
+   .-.
+  ( o )>
+   \   `--._
+    \       `--.___
+     \              `--.
+      \      .-"-.      `.
+       \    /     \       \
+        \  |       |       |
+         \  \     /       /
+          `. `---'      ,'
+            `-.______.-'
+               ||  ||
+              _||__||_
+   ~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
 A terminal interface to folder-based channels with unattended agent sessions.
 
 A long-running agent session on another machine writes what it is doing into a
