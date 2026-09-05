@@ -21,6 +21,21 @@ OverviewPane {
     color: $text-muted;
 }
 
+/* Decoration, docked out of the way and dimmed well below the data. */
+#pigeon-dock {
+    dock: bottom;
+    height: auto;
+    align-horizontal: right;
+    padding: 0 2 1 0;
+}
+
+#pigeon {
+    width: auto;
+    height: auto;
+    color: $text-muted;
+    opacity: 0.45;
+}
+
 #overview-table {
     height: auto;
     max-height: 100%;

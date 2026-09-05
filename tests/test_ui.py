@@ -427,3 +427,32 @@ async def test_a_failed_send_keeps_the_draft_to_retry(channel_root, monkeypatch)
         await pilot.press("ctrl+s")
         await settle(app, pilot)
         assert composer.display is True and composer.text == "worth keeping"
+
+
+# -- the bird -------------------------------------------------------------
+
+
+async def test_the_pigeon_appears_when_there_is_room_to_spare(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        assert app.screen.query_one("#pigeon-dock").display is True
+
+
+async def test_the_pigeon_stands_down_in_a_short_terminal(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test(size=(120, 18)) as pilot:
+        await settle(app, pilot)
+        assert app.screen.query_one("#pigeon-dock").display is False
+
+
+async def test_the_pigeon_never_costs_a_channel_a_row(tmp_path):
+    """Decoration yields to data: enough channels and the bird goes away."""
+    from inzaghi.protocol import init_channel
+
+    roots = [init_channel(tmp_path / f"chan{i:02d}").channel.root for i in range(14)]
+    app = channels_only_app(*roots)
+    async with app.run_test(size=(120, 32)) as pilot:
+        await settle(app, pilot)
+        assert app.query_one(DataTable).row_count == 14
+        assert app.screen.query_one("#pigeon-dock").display is False

@@ -11,7 +11,7 @@ from datetime import datetime
 
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import DataTable, Static
 
@@ -21,6 +21,29 @@ from ..model import Snapshot
 from .rows import HEALTH_STYLE
 
 _COLUMNS = ("", "channel", "heartbeat", "next update", "", "state")
+
+#: Home to the loft, message still attached.
+PIGEON = r"""
+   .-.
+  ( o )>
+   \   `--._
+    \       `--.___
+     \              `--.
+      \      .-"-.      `.
+       \    /     \       \
+        \  |       |       |
+         \  \     /       /
+          `. `---'      ,'
+            `-.______.-'
+               ||  ||
+              _||__||_
+   ~~~~~~~~~~~~~~~~~~~~~~~~
+""".strip("\n")
+
+PIGEON_HEIGHT = len(PIGEON.splitlines())
+PIGEON_WIDTH = max(len(line) for line in PIGEON.splitlines())
+#: Rows the table needs before the bird: summary, blank, header.
+_TABLE_CHROME = 4
 
 
 class OverviewPane(Vertical):
@@ -38,6 +61,8 @@ class OverviewPane(Vertical):
         table = DataTable(id="overview-table", cursor_type="row", zebra_stripes=False)
         table.add_columns(*_COLUMNS)
         yield table
+        with Horizontal(id="pigeon-dock"):
+            yield Static(PIGEON, id="pigeon", markup=False)
 
     def update(
         self,
@@ -61,6 +86,7 @@ class OverviewPane(Vertical):
 
         if table.row_count:
             table.move_cursor(row=min(cursor, table.row_count - 1))
+        self._fit_pigeon(len(channels))
         unread_total = sum(unread.values())
         self.query_one("#overview-summary", Static).update(
             Text.from_markup(
@@ -75,6 +101,20 @@ class OverviewPane(Vertical):
 
     def on_mount(self) -> None:
         self.focus_table()
+
+    def on_resize(self) -> None:
+        self._fit_pigeon(self.query_one(DataTable).row_count)
+
+    def _fit_pigeon(self, channel_count: int) -> None:
+        """Show the bird only where it costs nothing.
+
+        Decoration must never push a channel off the screen, so it appears only
+        when the table has already been given every row it needs.
+        """
+        spare = self.size.height - channel_count - _TABLE_CHROME
+        self.query_one("#pigeon-dock").display = (
+            spare >= PIGEON_HEIGHT and self.size.width >= PIGEON_WIDTH + 4
+        )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.row_key.value:
