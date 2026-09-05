@@ -15,6 +15,7 @@ from textual.widgets.option_list import Option, OptionDoesNotExist
 from .. import fmt
 from ..channel import Channel
 from ..model import Snapshot
+from .composer import Composer
 from .rows import (
     ALL,
     HEALTH_STYLE,
@@ -45,6 +46,14 @@ class ChannelPane(Vertical):
     the reader's scroll position under someone who is reading: the timeline is
     only rebuilt when the set of rows or their labels actually changed.
     """
+
+    class Send(Message):
+        """A finished draft, on its way to the app that owns the write."""
+
+        def __init__(self, channel_key: str, text: str) -> None:
+            super().__init__()
+            self.channel_key = channel_key
+            self.text = text
 
     class Read(Message):
         """A row was displayed long enough to count as read."""
@@ -81,7 +90,9 @@ class ChannelPane(Vertical):
         yield Static("", id="filterbar", markup=True)
         yield Input(placeholder="search this channel", id="search")
         with Horizontal(id="channel-body"):
-            yield OptionList(id="timeline")
+            with Vertical(id="left"):
+                yield OptionList(id="timeline")
+                yield Composer(id="composer")
             with VerticalScroll(id="reader"):
                 yield Markdown(_EMPTY, id="doc")
 
@@ -275,6 +286,27 @@ class ChannelPane(Vertical):
 
     def focus_timeline(self) -> None:
         self.query_one(OptionList).focus()
+
+    # -- composing --------------------------------------------------------
+
+    @property
+    def composer(self) -> Composer:
+        return self.query_one(Composer)
+
+    def open_composer(self, due: str) -> None:
+        self.composer.open(self.channel.name, due)
+
+    def close_composer(self, *, clear: bool = True) -> None:
+        self.composer.close(clear=clear)
+
+    def on_composer_send(self, event: Composer.Send) -> None:
+        """Hand the draft up; the app owns writes and the read-only guard."""
+        event.stop()
+        self.post_message(self.Send(self.channel.key, event.text))
+
+    def on_composer_closed(self, event: Composer.Closed) -> None:
+        event.stop()
+        self.focus_timeline()
 
 
 def _escape(text: str) -> str:

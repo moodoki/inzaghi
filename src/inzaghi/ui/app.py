@@ -18,13 +18,14 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from .. import compose as composer
+from .. import fmt
 from ..channel import Channel, absence_is_real, remove_conflicts
 from ..compose import QUICK_ACTIONS, QUICK_BY_KEYWORD, QuickAction, ReadOnlyChannel
 from ..config import Config
 from ..model import Snapshot
 from ..state import ReadState
 from .channel_view import ChannelPane
-from .modals import ComposeScreen, ConfirmScreen, Draft
+from .modals import ConfirmScreen
 from .overview import OverviewPane
 from .rows import HEALTH_STYLE
 
@@ -352,25 +353,30 @@ class InzaghiApp(App):
         self.rescan()
 
     def action_compose(self) -> None:
+        """Open the draft box beneath the timeline, leaving the reader visible."""
         channel = self.current_channel()
         if channel is None:
             self.notify("Open a channel tab first.", severity="warning")
             return
         if not self._writable(channel):
             return
+        pane = self._pane_for(channel.key)
+        if pane is None:
+            return
         snapshot = self.snapshots.get(channel.key)
         due = "next wakeup unknown"
         if snapshot and snapshot.heartbeat:
-            from .. import fmt
-
             due = fmt.countdown(snapshot.heartbeat.next_by, datetime.now().astimezone())
-        self.push_screen(ComposeScreen(channel.name, due), self._send_draft)
+        pane.open_composer(due)
 
-    def _send_draft(self, draft: Draft | None) -> None:
-        channel = self.current_channel()
-        if draft is None or channel is None:
+    @on(ChannelPane.Send)
+    def _send_draft(self, event: ChannelPane.Send) -> None:
+        channel = next((c for c in self.channels if c.key == event.channel_key), None)
+        pane = self._pane_for(event.channel_key)
+        if channel is None or pane is None or not self._writable(channel):
             return
-        self._write(channel, lambda: composer.send(channel, draft.text))
+        if self._write(channel, lambda: composer.send(channel, event.text)) is not None:
+            pane.close_composer()  # a failed send keeps the draft to retry
 
     def action_quick(self, keyword: str) -> None:
         channel = self.current_channel()
@@ -395,14 +401,16 @@ class InzaghiApp(App):
     def _send_quick(self, channel: Channel, action: QuickAction) -> None:
         self._write(channel, lambda: composer.send_quick(channel, action))
 
-    def _write(self, channel: Channel, write) -> None:
+    def _write(self, channel: Channel, write):
+        """Perform a write, reporting either way. Returns the path, or None."""
         try:
             path = write()
         except (ReadOnlyChannel, OSError, ValueError) as exc:
             self.notify(str(exc), severity="error", timeout=20)
-            return
+            return None
         self.notify(f"Sent to {channel.name}: {path.name}")
         self.rescan()
+        return path
 
     def _writable(self, channel: Channel) -> bool:
         if channel.read_only:

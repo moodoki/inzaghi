@@ -91,6 +91,18 @@ again in its own chronological place — cannot leave anything new underneath it
 Your own messages and the pinned panels are never unread, so they never make a
 boundary on their own.
 
+## Writing a message
+
+`c` opens a draft box in the bottom half of the timeline column, not over the
+screen — writing to a session is mostly an act of reading, and quoting a number
+out of one notification while checking what another said is impossible from
+behind a modal.
+
+`esc` hands the keyboard back to the list, leaving the draft standing, so you
+can move through entries and read them; `c` returns to it with the text intact.
+`ctrl+s` sends, `ctrl+e` opens `$EDITOR`, `ctrl+g` discards. A send that fails
+keeps the draft to retry.
+
 ## Sync-conflict copies
 
 A sync client that cannot merge an overwritten file leaves a duplicate beside

@@ -1,83 +1,15 @@
-"""Modal screens: composing a message, and confirming a dangerous one."""
+"""Modal screens. Only one: confirming something that changes a run."""
 
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
+from textual.widgets import Button, Label, Static
+
 from rich.markup import escape
-from textual.widgets import Button, Label, Static, TextArea
-
-from ..compose import QuickAction
-
-
-@dataclass(frozen=True, slots=True)
-class Draft:
-    """What the compose screen hands back."""
-
-    text: str
-    #: Set when the draft is a recognised keyword rather than free-form text.
-    action: QuickAction | None = None
-
-
-class ComposeScreen(ModalScreen[Draft | None]):
-    """A message to a session, which will not be read for a while.
-
-    The screen shows when the session is next expected, because that -- not
-    typing speed -- decides whether a message is worth sending at all.
-    """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel", show=True),
-        Binding("ctrl+s", "send", "Send", show=True, priority=True),
-        Binding("ctrl+e", "editor", "$EDITOR", show=True, priority=True),
-    ]
-
-    def __init__(self, channel_name: str, due: str, initial: str = "") -> None:
-        super().__init__()
-        self._channel_name = channel_name
-        self._due = due
-        self._initial = initial
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="compose-box"):
-            yield Label(f"Message to [b]{escape(self._channel_name)}[/]", id="compose-title")
-            yield Static(f"[dim]session {self._due}[/]", id="compose-due")
-            yield TextArea(self._initial, id="compose-text", soft_wrap=True)
-            with Horizontal(id="compose-buttons"):
-                yield Button("Send", variant="primary", id="send")
-                yield Button("Cancel", id="cancel")
-
-    def on_mount(self) -> None:
-        self.query_one(TextArea).focus()
-
-    def action_send(self) -> None:
-        text = self.query_one(TextArea).text.strip()
-        self.dismiss(Draft(text=text) if text else None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def action_editor(self) -> None:
-        """Hand the draft to $EDITOR, then take back whatever it saved."""
-        area = self.query_one(TextArea)
-        with self.app.suspend():
-            edited = _edit_externally(area.text)
-        if edited is not None:
-            area.text = edited
-        area.focus()
-
-    @on(Button.Pressed, "#send")
-    def _send(self) -> None:
-        self.action_send()
-
-    @on(Button.Pressed, "#cancel")
-    def _cancel(self) -> None:
-        self.action_cancel()
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -117,26 +49,3 @@ class ConfirmScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#no")
     def _no(self) -> None:
         self.dismiss(False)
-
-
-def _edit_externally(text: str) -> str | None:
-    """Round-trip ``text`` through $EDITOR; ``None`` if the editor failed."""
-    import os
-    import subprocess
-    import tempfile
-    from pathlib import Path
-
-    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
-    handle, name = tempfile.mkstemp(suffix=".md", prefix="inzaghi-")
-    path = Path(name)
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        result = subprocess.run([*editor.split(), str(path)])
-        if result.returncode != 0:
-            return None
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    finally:
-        path.unlink(missing_ok=True)

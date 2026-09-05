@@ -32,7 +32,7 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/compose.py   atomic writes into inbox/
     src/inzaghi/skill.py     installing the protocol into an agent harness
     src/inzaghi/skills/      the session-side skill, shipped as package data
-    src/inzaghi/ui/          Textual app
+    src/inzaghi/ui/          Textual app (composer.py is the inline draft box)
 
 Installed as two console scripts, `inzaghi` and the `inz` alias, both pointing
 at `cli:main`; `cli._prog()` reports whichever name was typed.

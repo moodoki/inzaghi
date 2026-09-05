@@ -12,7 +12,8 @@ from inzaghi.config import ChannelSpec, Config, RootSpec
 from inzaghi.protocol import init_channel
 from inzaghi.ui.app import OVERVIEW_ID, InzaghiApp
 from inzaghi.ui.channel_view import ChannelPane
-from inzaghi.ui.modals import ComposeScreen, ConfirmScreen
+from inzaghi.ui.composer import Composer
+from inzaghi.ui.modals import ConfirmScreen
 
 
 @pytest.fixture(autouse=True)
@@ -98,8 +99,9 @@ async def test_compose_writes_a_message_into_the_inbox(channel_root):
         await pilot.pause()
         await pilot.press("c")
         await pilot.pause()
-        assert isinstance(app.screen, ComposeScreen)
-        app.screen.query_one(TextArea).text = "drop to batch 8"
+        composer = app.screen.query_one(Composer)
+        assert composer.display is True
+        composer.query_one(TextArea).text = "drop to batch 8"
         await pilot.press("ctrl+s")
         await settle(app, pilot)
         sent = list((channel_root / "inbox").glob("*.md"))
@@ -144,7 +146,8 @@ async def test_a_read_only_channel_cannot_be_written_from_the_ui(channel_root):
         for key in ("c", "s", "x"):
             await pilot.press(key)
             await pilot.pause()
-            assert not isinstance(app.screen, (ComposeScreen, ConfirmScreen))
+            assert not isinstance(app.screen, ConfirmScreen)
+            assert app.screen.query_one(Composer).display is False
         await settle(app, pilot)
         assert list((channel_root / "inbox").glob("*.md")) == []
 
@@ -318,3 +321,109 @@ async def test_a_half_synced_channel_keeps_its_tab(channel_root, tmp_path):
         rmtree(second / "notifications")
         await rediscover(app, pilot)
         assert len(app.channels) == 2
+
+
+# -- the inline composer --------------------------------------------------
+
+
+async def test_the_composer_leaves_the_reader_on_screen(channel_root):
+    """The point of it being inline: nothing is covered while you write."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, type(app.screen))  # no modal was pushed
+        assert app.screen.query_one(Composer).display is True
+        assert app.screen.query_one("#reader").display is True
+        assert app.screen.query_one(OptionList).display is True
+
+
+async def test_a_draft_survives_going_back_to_read_something(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        composer = app.screen.query_one(Composer)
+        composer.query_one(TextArea).text = "half a thought"
+
+        await pilot.press("escape")  # back to the list
+        await pilot.pause()
+        assert app.screen.query_one(OptionList).has_focus
+        assert composer.display is True and composer.text == "half a thought"
+
+        await pilot.press("down", "down")  # read something else
+        await pilot.press("c")
+        await pilot.pause()
+        assert composer.query_one(TextArea).has_focus
+        assert composer.text == "half a thought"
+
+
+async def test_discard_empties_the_draft(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        composer = app.screen.query_one(Composer)
+        composer.query_one(TextArea).text = "never mind"
+        await pilot.press("ctrl+g")
+        await pilot.pause()
+        assert composer.display is False and composer.text == ""
+
+
+async def test_sending_closes_the_composer_and_clears_it(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        composer = app.screen.query_one(Composer)
+        composer.query_one(TextArea).text = "please rerun shard 4"
+        await pilot.press("ctrl+s")
+        await settle(app, pilot)
+        assert composer.display is False and composer.text == ""
+        (sent,) = list((channel_root / "inbox").glob("*.md"))
+        assert sent.read_text() == "please rerun shard 4\n"
+
+
+async def test_an_empty_draft_sends_nothing(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.press("ctrl+s")
+        await settle(app, pilot)
+        assert list((channel_root / "inbox").glob("*.md")) == []
+        assert app.screen.query_one(Composer).display is True
+
+
+async def test_a_failed_send_keeps_the_draft_to_retry(channel_root, monkeypatch):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        await pilot.press("c")
+        await pilot.pause()
+        composer = app.screen.query_one(Composer)
+        composer.query_one(TextArea).text = "worth keeping"
+
+        def boom(*args, **kwargs):
+            raise OSError("volume went away")
+
+        monkeypatch.setattr("inzaghi.ui.app.composer.send", boom)
+        await pilot.press("ctrl+s")
+        await settle(app, pilot)
+        assert composer.display is True and composer.text == "worth keeping"

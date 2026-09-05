@@ -59,18 +59,44 @@ ChannelPane {
     height: 1fr;
 }
 
+/* The left column: the log, with the draft box folded out beneath it. */
+#left {
+    width: 46%;
+    min-width: 34;
+    height: 1fr;
+    border-right: solid $panel;
+}
+
 #timeline {
     /* A list of one-line entries: clip long titles rather than reflow them,
        so every row stays on the same grid. */
     text-wrap: nowrap;
     text-overflow: ellipsis;
-    width: 46%;
-    min-width: 34;
+    width: 1fr;
     height: 1fr;
     border: none;
-    border-right: solid $panel;
     padding: 0 1;
     background: $surface;
+}
+
+Composer {
+    height: 50%;
+    min-height: 8;
+    border-top: solid $primary;
+    padding: 0 1;
+    background: $surface;
+}
+
+#composer-head {
+    height: 1;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#compose-text {
+    height: 1fr;
+    border: none;
+    padding: 0;
 }
 
 #timeline > .option-list--option-highlighted {
@@ -86,38 +112,16 @@ ChannelPane {
 
 /* -- modals ------------------------------------------------------------ */
 
-ComposeScreen, ConfirmScreen {
+ConfirmScreen {
     align: center middle;
 }
 
-#compose-box {
-    width: 84;
-    max-width: 90%;
-    height: auto;
-    padding: 1 2;
-    border: thick $primary;
-    background: $surface;
-}
-
-#compose-title {
-    text-style: bold;
-}
-
-#compose-due {
-    padding: 0 0 1 0;
-}
-
-#compose-text {
-    height: 12;
-    margin-bottom: 1;
-}
-
-#compose-buttons, #confirm-buttons {
+#confirm-buttons {
     height: auto;
     align-horizontal: right;
 }
 
-#compose-buttons Button, #confirm-buttons Button {
+#confirm-buttons Button {
     margin-left: 2;
 }
 
