@@ -19,6 +19,13 @@ from inzaghi.config import ChannelSpec, Config, RootSpec
 from inzaghi.protocol import init_channel
 from inzaghi.ui.app import OVERVIEW_ID, InzaghiApp
 from inzaghi.ui.channel_view import ChannelPane
+from inzaghi.ui.overview import (
+    PIGEON,
+    PIGEON_BLINK,
+    PIGEON_HEIGHT,
+    PIGEON_WIDTH,
+    OverviewPane,
+)
 from inzaghi.ui.composer import Composer
 from inzaghi.ui.modals import ConfirmScreen
 
@@ -622,6 +629,41 @@ async def test_the_pigeon_stands_down_in_a_short_terminal(channel_root):
     async with app.run_test(size=(120, 18)) as pilot:
         await settle(app, pilot)
         assert app.screen.query_one("#pigeon-dock").display is False
+
+
+def test_the_blink_is_the_same_bird_with_its_eye_shut():
+    """Blinking must not move anything: _fit_pigeon sizes the dock from PIGEON."""
+    assert PIGEON_BLINK != PIGEON, "the eye pattern no longer matches the drawing"
+    assert len(PIGEON_BLINK.splitlines()) == PIGEON_HEIGHT
+    assert max(len(line) for line in PIGEON_BLINK.splitlines()) == PIGEON_WIDTH
+
+
+async def test_the_pigeon_blinks_and_opens_its_eye_again(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await settle(app, pilot)
+        overview = app.query_one(OverviewPane)
+        eye = app.screen.query_one("#pigeon", Static)
+
+        overview._blink()
+        await pilot.pause()
+        assert str(eye.content) == PIGEON_BLINK
+
+        overview._open_eye()
+        await pilot.pause()
+        assert str(eye.content) == PIGEON
+
+
+async def test_a_bird_nobody_can_see_does_not_blink(channel_root):
+    """Decoration should not cost a redraw off screen."""
+    app = make_app(channel_root)
+    async with app.run_test(size=(120, 18)) as pilot:
+        await settle(app, pilot)
+        assert app.screen.query_one("#pigeon-dock").display is False
+
+        app.query_one(OverviewPane)._blink()
+        await pilot.pause()
+        assert str(app.screen.query_one("#pigeon", Static).content) == PIGEON
 
 
 async def test_the_pigeon_never_costs_a_channel_a_row(tmp_path):

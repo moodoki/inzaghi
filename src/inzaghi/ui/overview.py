@@ -7,6 +7,7 @@ does it need me, and is there anything I have not read.
 
 from __future__ import annotations
 
+import random
 from datetime import datetime
 
 from rich.text import Text
@@ -39,6 +40,17 @@ PIGEON = r"""
               _||__||_
    ~~~~~~~~~~~~~~~~~~~~~~~~
 """.strip("\n")
+
+#: The same bird with its eye shut. Derived rather than drawn a second time, so
+#: redrawing the pigeon cannot leave the two out of step -- and if the eye ever
+#: stops matching, the blink quietly does nothing rather than showing a
+#: different bird.
+PIGEON_BLINK = PIGEON.replace("( o )", "( - )")
+
+#: Long enough to read as a blink, short enough not to look like a glitch.
+BLINK_SHUT_SECONDS = 0.12
+#: Range between blinks. Irregular, because a metronome reads as a cursor.
+BLINK_GAP_SECONDS = (3.0, 9.0)
 
 PIGEON_HEIGHT = len(PIGEON.splitlines())
 PIGEON_WIDTH = max(len(line) for line in PIGEON.splitlines())
@@ -102,6 +114,28 @@ class OverviewPane(Vertical):
 
     def on_mount(self) -> None:
         self.focus_table()
+        self._schedule_blink()
+
+    # -- the bird -----------------------------------------------------------
+
+    def _schedule_blink(self) -> None:
+        self.set_timer(random.uniform(*BLINK_GAP_SECONDS), self._blink)
+
+    def _blink(self) -> None:
+        """Shut the eye, and open it again shortly after.
+
+        Skipped whole while the bird is not on show: it is decoration, and
+        decoration should not cost a redraw nobody can see.
+        """
+        if not self.query_one("#pigeon-dock").display:
+            self._schedule_blink()
+            return
+        self.query_one("#pigeon", Static).update(PIGEON_BLINK)
+        self.set_timer(BLINK_SHUT_SECONDS, self._open_eye)
+
+    def _open_eye(self) -> None:
+        self.query_one("#pigeon", Static).update(PIGEON)
+        self._schedule_blink()
 
     def on_resize(self) -> None:
         self._fit_pigeon(self.query_one(DataTable).row_count)
