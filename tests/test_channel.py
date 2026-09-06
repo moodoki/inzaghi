@@ -60,6 +60,46 @@ def test_a_hard_stop_raises_attention(channel, channel_root):
     assert channel.scan(now=NOW).attention(NOW) is True
 
 
+def test_reading_a_hard_stop_stops_it_asking_for_you(channel, channel_root):
+    """It is a thing that happened; once seen it is history, not a demand."""
+    path = write(
+        channel_root / "notifications" / "2026-09-05_0100_hard-stop_needs-a-decision.md",
+        "# [hard-stop] Which checkpoint?\n",
+    )
+    snap = channel.scan(now=NOW)
+    assert snap.attention(NOW, {str(path)}) is True
+    assert snap.attention(NOW, set()) is False
+
+
+def test_an_unread_error_asks_for_you_however_far_down_the_log_it_is(channel, channel_root):
+    """Traffic arriving on top of an error does not make it dealt with."""
+    path = write(
+        channel_root / "notifications" / "2026-09-04_0100_error_disk-filled.md",
+        "# [error] Disk filled\n",
+    )
+    for index in range(6):
+        write(
+            channel_root / "notifications" / f"2026-09-05_010{index}_milestone_shard-{index}.md",
+            f"# [milestone] Shard {index}\n",
+        )
+    snap = channel.scan(now=NOW)
+    assert snap.events[0].kind == "milestone"  # the error is well below the fold
+    assert snap.attention(NOW, {str(path)}) is True
+
+
+def test_a_real_question_outlives_reading_the_error_beside_it(channel, channel_root):
+    """waiting stands on its own: the session says when it is unblocked."""
+    write(
+        channel_root / "notifications" / "STATUS.md",
+        "# status\n\n## Waiting on you\nPick a batch size.\n",
+    )
+    write(
+        channel_root / "notifications" / "2026-09-05_0100_error_disk-filled.md",
+        "# [error] Disk filled\n",
+    )
+    assert channel.scan(now=NOW).attention(NOW, set()) is True
+
+
 def test_sent_message_is_threaded_with_its_ack(channel):
     (thread,) = channel.scan(now=NOW).threads
     assert thread.state == "acked"

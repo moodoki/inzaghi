@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 from shutil import rmtree
 from unittest import mock
 
-from textual.widgets import DataTable, OptionList, TabbedContent, TextArea
+from textual.widgets import DataTable, OptionList, Static, TabbedContent, TextArea
+
+from conftest import write
 
 from inzaghi import channel as channel_module
 from inzaghi import compose as composer_module
@@ -148,6 +151,39 @@ async def test_a_read_only_channel_cannot_be_written_from_the_ui(channel_root):
             assert app.screen.query_one(Composer).display is False
         await settle(app, pilot)
         assert list((channel_root / "inbox").glob("*.md")) == []
+
+
+# -- the overview summary -------------------------------------------------
+
+
+def summary(app) -> str:
+    return str(app.query_one("#overview-summary", Static).content)
+
+
+async def test_reading_an_error_clears_it_from_the_overview_count(channel_root):
+    """The count answers "does anything want me", not "did anything ever go wrong"."""
+    # The app runs on the wall clock, so give the channel a live heartbeat --
+    # otherwise it is overdue and asks for you on that account alone.
+    now = datetime.now().astimezone()
+    write(
+        channel_root / "notifications" / "HEARTBEAT.md",
+        f"# heartbeat\n\n- **updated:** {now.isoformat()}\n"
+        f"- **next update expected by:** {(now + timedelta(hours=1)).isoformat()}\n",
+    )
+    write(
+        channel_root / "notifications" / "2026-09-05_0100_error_index-writer-crashed.md",
+        "# [error] Index writer crashed on shard 4\n",
+    )
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert "1 need you" in summary(app)
+
+        await pilot.press("a")  # mark everything read
+        await settle(app, pilot)
+
+        assert "1 need you" not in summary(app)
+        assert "none waiting" in summary(app)
 
 
 # -- pruning read receipts ------------------------------------------------

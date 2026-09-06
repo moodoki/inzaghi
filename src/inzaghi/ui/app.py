@@ -24,7 +24,7 @@ from .. import fmt
 from ..channel import Channel, absence_is_real, remove_conflicts
 from ..compose import QUICK_ACTIONS, QUICK_BY_KEYWORD, QuickAction, ReadOnlyChannel
 from ..config import Config
-from ..model import Snapshot
+from ..model import LOUD_KINDS, Snapshot
 from ..state import ReadState
 from .channel_view import ChannelPane
 from .modals import ConfirmScreen
@@ -32,8 +32,6 @@ from .overview import OverviewPane
 from .rows import HEALTH_STYLE
 
 OVERVIEW_ID = "overview"
-#: Kinds that are worth interrupting someone for the moment they appear.
-LOUD_KINDS = frozenset({"hard-stop", "error"})
 
 
 class InzaghiApp(App):
@@ -215,18 +213,18 @@ class InzaghiApp(App):
         self.state.save()
 
     def _refresh_widgets(self, now: datetime) -> None:
-        unread_counts: dict[str, int] = {}
+        unread_paths: dict[str, set[str]] = {}
         for channel in self.channels:
             snapshot = self.snapshots.get(channel.key)
             if snapshot is None:
                 continue
             unread = {str(event.path) for event in self.state.unread(channel.key, snapshot)}
-            unread_counts[channel.key] = len(unread)
+            unread_paths[channel.key] = unread
             pane = self._pane_for(channel.key)
             if pane is not None:
                 pane.update(snapshot, unread, now)
             self._badge(channel, snapshot, len(unread), now)
-        self.query_one(OverviewPane).update(self.channels, self.snapshots, unread_counts, now)
+        self.query_one(OverviewPane).update(self.channels, self.snapshots, unread_paths, now)
         # check_action() results are cached, so the footer would keep offering
         # "k Clean" after the last conflict copy was deleted.
         self.refresh_bindings()
@@ -237,7 +235,7 @@ class InzaghiApp(App):
         for pane in self.query(ChannelPane):
             pane.update_strip(now)
         unread = {
-            channel.key: len(self.state.unread(channel.key, snapshot))
+            channel.key: {str(event.path) for event in self.state.unread(channel.key, snapshot)}
             for channel in self.channels
             if (snapshot := self.snapshots.get(channel.key)) is not None
         }

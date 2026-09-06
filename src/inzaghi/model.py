@@ -16,6 +16,9 @@ Direction = Literal["in", "out"]
 # "probably dead".  Two missed windows: one can be a slow job, two is a pattern.
 _STALE_FACTOR = 2
 
+#: Kinds that ask for a human the moment they appear.
+LOUD_KINDS = frozenset({"hard-stop", "error"})
+
 #: Default slack allowed past a promised update before calling it late. The
 #: heartbeat has to cross a sync client to reach us, so a deadline that has just
 #: passed usually means the file is still in flight, not that anything is wrong.
@@ -228,13 +231,21 @@ class Snapshot:
             return "unknown"
         return self.heartbeat.health(now or self.scanned_at, self.grace)
 
-    def attention(self, now: datetime | None = None) -> bool:
-        """Does this channel want a human right now?"""
-        return bool(
-            self.waiting
-            or self.health(now) in {"late", "stale"}
-            or any(e.kind in {"hard-stop", "error"} for e in self.events[:5])
-        )
+    def attention(self, now: datetime | None = None, unread: set[str] | None = None) -> bool:
+        """Does this channel want a human right now?
+
+        A hard-stop or an error is a thing that *happened*, so it asks for
+        someone only until they have read it. Trouble that is still going on
+        says so on its own -- through ``waiting``, or by the session missing
+        its heartbeat -- and neither of those depends on having been read.
+
+        ``unread`` is the set of paths not yet read. ``None`` means no read
+        state was supplied, and then an unseen event is the safer assumption.
+        """
+        loud = [event for event in self.events if event.kind in LOUD_KINDS]
+        if unread is not None:
+            loud = [event for event in loud if str(event.path) in unread]
+        return bool(self.waiting or self.health(now) in {"late", "stale"} or loud)
 
 
 def _first_ts(*candidates: str | None) -> datetime | None:

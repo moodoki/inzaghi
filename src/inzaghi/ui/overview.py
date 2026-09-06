@@ -68,7 +68,7 @@ class OverviewPane(Vertical):
         self,
         channels: list[Channel],
         snapshots: dict[str, Snapshot],
-        unread: dict[str, int],
+        unread: dict[str, set[str]],
         now: datetime,
     ) -> None:
         table = self.query_one(DataTable)
@@ -80,14 +80,15 @@ class OverviewPane(Vertical):
             if snapshot is None:
                 table.add_row(Text("·", "dim"), channel.name, "", "", "", Text("scanning…", "dim"), key=channel.key)
                 continue
-            if snapshot.attention(now):
+            seen = unread.get(channel.key, set())
+            if snapshot.attention(now, seen):
                 needs_you += 1
-            table.add_row(*_row(channel, snapshot, unread.get(channel.key, 0), now), key=channel.key)
+            table.add_row(*_row(channel, snapshot, seen, now), key=channel.key)
 
         if table.row_count:
             table.move_cursor(row=min(cursor, table.row_count - 1))
         self._fit_pigeon(len(channels))
-        unread_total = sum(unread.values())
+        unread_total = sum(len(paths) for paths in unread.values())
         self.query_one("#overview-summary", Static).update(
             Text.from_markup(
                 f"[b]{len(channels)}[/] channel{'s' if len(channels) != 1 else ''}"
@@ -121,12 +122,12 @@ class OverviewPane(Vertical):
             self.post_message(self.Open(str(event.row_key.value)))
 
 
-def _row(channel: Channel, snapshot: Snapshot, unread: int, now: datetime) -> tuple[Text, ...]:
+def _row(channel: Channel, snapshot: Snapshot, unread: set[str], now: datetime) -> tuple[Text, ...]:
     health = snapshot.health(now)
     mark, colour = HEALTH_STYLE[health]
     heartbeat = snapshot.heartbeat
 
-    name = Text(channel.name, "bold" if snapshot.attention(now) else "")
+    name = Text(channel.name, "bold" if snapshot.attention(now, unread) else "")
     if channel.read_only:
         name.append("  r/o", "dim italic")
 
@@ -139,7 +140,7 @@ def _row(channel: Channel, snapshot: Snapshot, unread: int, now: datetime) -> tu
     if snapshot.waiting:
         flags.append("!", "bold red")
     if unread:
-        flags.append(f"{unread}", "bold")
+        flags.append(f"{len(unread)}", "bold")
     if snapshot.in_flight:
         flags.append("^", "bright_blue")
 
