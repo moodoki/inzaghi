@@ -17,6 +17,7 @@ from ..channel import Channel
 from ..model import Attachment, Snapshot
 from .composer import Composer
 from .mounting import composed
+from .preview import Preview
 from .rows import (
     ALL,
     HEALTH_STYLE,
@@ -66,13 +67,20 @@ class ChannelPane(Vertical):
         """An attachment someone asked to see, on its way to the app.
 
         The app owns it for the same reason it owns writes: showing a file
-        means launching something, and that waits on the channel's volume.
+        means either launching something or reading it, and both wait on the
+        channel's volume.
         """
 
-        def __init__(self, channel_key: str, attachment: Attachment) -> None:
+        def __init__(
+            self, channel_key: str, attachment: Attachment, *, refresh: bool = False
+        ) -> None:
             super().__init__()
             self.channel_key = channel_key
             self.attachment = attachment
+            #: A re-read of something already on screen rather than somebody
+            #: asking to see it: it must not take the keyboard or the scroll
+            #: position away from whoever is reading.
+            self.refresh = refresh
 
     class Read(Message):
         """A row was displayed long enough to count as read."""
@@ -120,10 +128,19 @@ class ChannelPane(Vertical):
                 yield Composer(id="composer")
             with Vertical(id="reader-column"):
                 with VerticalScroll(id="reader"):
-                    yield Markdown(_EMPTY, id="doc")
+                    # ``open_links=False``: left on, the widget hands every
+                    # href it is clicked on straight to ``app.open_url`` --
+                    # the web browser, or xdg-open -- before this pane hears
+                    # about it. A channel is written by an unattended session,
+                    # so what a link does here is decided below and nowhere
+                    # else.
+                    yield Markdown(_EMPTY, id="doc", open_links=False)
                 # Outside the scroll: what a notification delivered belongs to
                 # the notification, not to whatever part of it is on screen.
                 yield OptionList(id=ATTACHMENTS)
+                # Beneath the list, so that a file the reader can render sits
+                # directly under the line that named it.
+                yield Preview(id="preview")
 
     # -- updating ---------------------------------------------------------
 
@@ -278,9 +295,13 @@ class ChannelPane(Vertical):
 
         Where the session wrote the link is where someone's eye lands, so it
         has to work from there too. Anything else the document links to is
-        left alone -- this is a channel reader, not a browser.
+        left alone -- this is a channel reader, not a browser, and the widget
+        is built with ``open_links=False`` so that nothing else can decide
+        otherwise.
         """
         event.stop()
+        if event.markdown.id != "doc":
+            return  # a link inside a delivered file is the session's text, not ours
         name = attach.link_name(event.href)
         self._open(next((a for a in self._attachments if a.name == name), None))
 
@@ -310,6 +331,10 @@ class ChannelPane(Vertical):
             self.query_one("#doc", Markdown).update(row.doc.body or _EMPTY)
             if is_new_document:
                 self.query_one("#reader", VerticalScroll).scroll_home(animate=False)
+                # A delivered file belongs to the entry that announced it, so
+                # it goes when the entry does rather than sitting under prose
+                # that never mentioned it.
+                self.preview.close()
         # Checked separately from the document above: a payload lands minutes
         # after the notification that announced it, and re-rendering the prose
         # for that would throw away the reader's place for nothing.
@@ -326,6 +351,7 @@ class ChannelPane(Vertical):
             return
         self._attachments = attachments
         listing = self.query_one(f"#{ATTACHMENTS}", OptionList)
+        held = self._highlighted_name(listing)
         listing.clear_options()
         listing.display = bool(attachments)
         if not attachments:
@@ -333,9 +359,77 @@ class ChannelPane(Vertical):
                 self.focus_timeline()
             self.refresh_bindings()
             return
-        listing.add_options([Option(_line(attachment_label(a))) for a in attachments])
+        listing.add_options(
+            [Option(_line(attachment_label(a)), id=a.name) for a in attachments]
+        )
+        # Restored by name, the way the timeline restores by option id: this
+        # list is refilled whenever anything about a delivery changes, and a
+        # session appending to a log it delivered changes one every poll.
         listing.highlighted = 0
+        if held is not None:
+            try:
+                listing.highlighted = listing.get_option_index(held)
+            except OptionDoesNotExist:
+                pass  # that file is no longer delivered here
         self.refresh_bindings()
+        self._follow_preview(attachments)
+
+    def _follow_preview(self, attachments: tuple[Attachment, ...]) -> None:
+        """Keep an open file in step with what the scan now says about it.
+
+        The strip only differs when something about a delivery does, and for
+        the one being read that means the text on screen is out of date: the
+        session rewrote it, or it has only just finished crossing the sync.
+        The re-read goes back out through the app, because reading the volume
+        is the app's job and not this thread's.
+
+        A file the notification no longer names, or that has stopped being
+        readable, closes rather than sitting there as a stale copy of
+        something that is no longer being claimed.
+        """
+        name = self.preview.showing_name
+        if name is None:
+            return
+        current = next((a for a in attachments if a.name == name), None)
+        if current is None or not current.readable:
+            self.preview.close()
+        elif not self.preview.is_current(current):
+            # Only when this file changed. The strip is rebuilt whenever any
+            # of the deliveries does, and re-reading the open one for a
+            # sibling that finished syncing is a read for nothing.
+            self.post_message(self.Open(self.channel.key, current, refresh=True))
+
+    @property
+    def preview(self) -> Preview:
+        return self.query_one(Preview)
+
+    def show_preview(
+        self, attachment: Attachment, text: str, truncated: bool, *, focus: bool
+    ) -> None:
+        """Put a text delivery in the bottom of the reader.  Called by the app.
+
+        Guarded like a timed refresh, and for the same reason: this arrives
+        from a worker, so the tab it was read for may have gone since.
+        """
+        if composed(self, "#preview"):
+            self.preview.show(attachment, text, truncated, focus=focus)
+
+    def on_preview_closed(self, event: Preview.Closed) -> None:
+        """The file had the keyboard; give it back to the list that opened it."""
+        event.stop()
+        listing = self.query_one(f"#{ATTACHMENTS}", OptionList)
+        if listing.display:
+            listing.focus()
+        else:
+            self.focus_timeline()
+
+    @staticmethod
+    def _highlighted_name(listing: OptionList) -> str | None:
+        """Which delivery the strip's cursor is on, before the list is refilled."""
+        index = listing.highlighted
+        if index is None or not 0 <= index < listing.option_count:
+            return None
+        return listing.get_option_at_index(index).id
 
     def _attachment_at(self, index: int | None) -> Attachment | None:
         if index is None or not 0 <= index < len(self._attachments):

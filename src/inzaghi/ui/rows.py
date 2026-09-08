@@ -202,8 +202,11 @@ def attachment_label(attachment: Attachment) -> str:
     name = escape(attachment.name)
     if attachment.arrival == "here":
         detail = fmt.size(attachment.size)
+        # Where enter would put it, so the line says what pressing it does.
         if attachment.disposition == "reveal":
             detail += " · in folder"
+        elif attachment.disposition == "read":
+            detail += " · in reader"
     elif attachment.arrival == "refused":
         detail = escape(attachment.problem)
     else:

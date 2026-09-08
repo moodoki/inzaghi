@@ -1,10 +1,10 @@
 """Files a notification delivers alongside its prose.
 
-A session that has something too big or too binary for Markdown writes it into
-``notifications/attachments/`` and points at it from the notification that
-explains it.  Inzaghi never renders these; it hands them to the desktop.
+A session that has something too big or too awkward for the body of a
+notification writes it into ``notifications/attachments/`` and points at it
+from the notification that explains it.
 
-Two rules shape everything here.
+Three rules shape everything here.
 
 **Nothing in the folder is read on its own.** An attachment exists because a
 notification names it.  A file nobody points at stays invisible, so a payload
@@ -17,6 +17,11 @@ decision about which application starts.  So the rule is narrow: a known
 viewable type opens in the system viewer, and everything else -- archives
 included -- only ever gets its containing folder shown.  A reference that
 climbs out of the folder is refused rather than followed.
+
+**What this reader can already render, it renders.** Markdown and plain text
+are the formats the pane is made of, so starting an application to show one
+is a detour out of the terminal for nothing.  Those are read here instead,
+into the bottom of the reader, and never handed to a launcher at all.
 """
 
 from __future__ import annotations
@@ -28,10 +33,16 @@ from stat import S_ISREG
 from urllib.parse import unquote
 
 from . import parse
-from .model import Attachment, Doc
+from .model import Attachment, Disposition, Doc
 
 #: The one folder a notification may deliver files from.
 ATTACHMENTS = "attachments"
+
+#: Types shown in the reader itself, in the pane beneath the notification
+#: that delivered them.  Read rather than launched: these are what the reader
+#: renders anyway, and staying in the terminal costs nothing and starts
+#: nothing.  Kept ahead of ``VIEWABLE`` when a suffix is in both.
+READABLE = frozenset({".md", ".markdown", ".txt"})
 
 #: Types handed to the system viewer.  Anything absent from this set is only
 #: ever revealed in a file manager, which is why the set is a whitelist and
@@ -49,9 +60,6 @@ VIEWABLE = frozenset(
         ".bmp",
         ".tif",
         ".tiff",
-        ".txt",
-        ".md",
-        ".markdown",
         ".log",
         ".csv",
         ".tsv",
@@ -60,6 +68,12 @@ VIEWABLE = frozenset(
         ".yml",
     }
 )
+
+#: How much of a text delivery is read into the reader.  A channel is written
+#: by an unattended session, so the file at the end of a reference may be a
+#: log that has been growing all night; enough to read, never the whole of
+#: whatever arrived.
+PREVIEW_BYTES = 256 * 1024
 
 #: How long to wait on a launcher before assuming it has settled in.  Long
 #: enough to catch one that refused outright, short enough not to hold a
@@ -142,7 +156,7 @@ def resolve(folder: Path, doc: Doc) -> tuple[Attachment, ...]:
 
 
 def _resolve_one(folder: Path, name: str, note: str) -> Attachment:
-    disposition = "view" if Path(name).suffix.lower() in VIEWABLE else "reveal"
+    disposition = _disposition(name)
     refusal = _lexical_refusal(name)
     path = folder / name
     if refusal:
@@ -185,7 +199,16 @@ def _resolve_one(folder: Path, name: str, note: str) -> Attachment:
         arrival="here",
         disposition=disposition,
         size=info.st_size,
+        mtime=info.st_mtime,
     )
+
+
+def _disposition(name: str) -> Disposition:
+    """How showing ``name`` would have to be done, from its suffix alone."""
+    suffix = Path(name).suffix.lower()
+    if suffix in READABLE:
+        return "read"
+    return "view" if suffix in VIEWABLE else "reveal"
 
 
 def _lexical_refusal(name: str) -> str:
@@ -212,11 +235,55 @@ def _inside(folder: Path, path: Path) -> bool:
         return False
 
 
-# -- showing them ---------------------------------------------------------
+# -- reading them ourselves -----------------------------------------------
+
+
+def read_text(attachment: Attachment, *, limit: int = PREVIEW_BYTES) -> tuple[str, bool]:
+    """The text of a ``read`` delivery, and whether it was cut short.
+
+    Touches the volume, so it belongs in a worker beside the scan: the file is
+    on a synced folder, and the read blocks for as long as that folder wants
+    to think about it.
+
+    The checks ``resolve`` already made are made again rather than trusted.
+    Not because the snapshot was wrong when it was taken, but because it was
+    taken a poll ago, and what sits at that path now is whatever the sync
+    client has since put there -- ``remove_conflicts`` re-validates for the
+    same reason.
+    """
+    if attachment.disposition != "read":
+        raise CannotOpen(f"{attachment.name} is not shown in the reader")
+    if not attachment.openable:
+        raise CannotOpen(attachment.problem or f"{attachment.name} has not arrived yet")
+    path = attachment.path
+    try:
+        if path.is_symlink():
+            raise CannotOpen(f"{attachment.name}: refused, a symlink")
+        if not S_ISREG(path.stat().st_mode):
+            raise CannotOpen(f"{attachment.name}: refused, not a file")
+        with path.open("rb") as handle:
+            raw = handle.read(limit + 1)
+    except OSError as exc:
+        raise CannotOpen(f"{attachment.name}: {exc.strerror or exc}") from None
+
+    truncated = len(raw) > limit
+    text = raw[:limit].decode("utf-8", errors="replace")
+    if truncated:
+        # Cut at the last line break there is, so the tail is a line the
+        # session wrote rather than half of one.
+        text = text[: text.rfind("\n") + 1] or text
+    return text, truncated
+
+
+# -- handing them to the desktop ------------------------------------------
 
 
 def argv(attachment: Attachment, *, platform: str = sys.platform) -> list[str]:
     """The command that shows ``attachment`` to the person at the terminal.
+
+    ``read`` never reaches here: a text delivery is rendered in the reader,
+    and launching it as well would open a second window onto what is already
+    on screen.
 
     ``view`` hands the file to the desktop's default application for its type;
     ``reveal`` asks for the folder it sits in instead.  macOS can highlight the
@@ -226,6 +293,8 @@ def argv(attachment: Attachment, *, platform: str = sys.platform) -> list[str]:
     Absolute either way.  A launcher is a separate process that inherits our
     working directory, and a config may well name a channel relatively.
     """
+    if attachment.disposition == "read":
+        raise CannotOpen(f"{attachment.name} is shown in the reader")
     target = attachment.path.absolute()
     if platform == "darwin":
         if attachment.disposition == "view":
@@ -240,6 +309,8 @@ def argv(attachment: Attachment, *, platform: str = sys.platform) -> list[str]:
 
 def launch(attachment: Attachment, *, platform: str = sys.platform) -> list[str]:
     """Hand an attachment to the desktop.  Returns the command it ran.
+
+    For everything the reader cannot render itself -- see ``read_text``.
 
     Never on the UI thread.  Both launchers can wait a long time: macOS
     ``open`` on a file iCloud has evicted blocks on the download, and

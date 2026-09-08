@@ -55,8 +55,9 @@ threaded back together.
 
 ## notifications/attachments/ (session → watcher)
 
-Anything that is not Markdown — a PDF, a tarball, a chart — goes here, and the
-notification that explains it points at it:
+Anything that does not belong in the body of a notification — a PDF, a tarball,
+a chart, a note too long to read inline — goes here, and the notification that
+explains it points at it:
 
 ```
 Numbers behind this: [raw criterion output, 12 runs](attachments/bench.tar.gz)
@@ -84,8 +85,11 @@ Rules, all of them consequences of the folder being synced and read later:
 * **Keep them small enough to sync.** A payload the client is still uploading
   when the run ends never arrives.
 
-The watcher opens these with the desktop, so a known viewable type (`.pdf`,
-images, plain text) opens in a viewer and everything else — archives included —
+What the watcher's reader can render, it renders: a delivered `.md` or `.txt`
+opens in a pane beneath the notification, without leaving the terminal. So a
+long report is fine as a file — it does not have to be squeezed into the prose.
+Everything else is handed to the desktop, where a known viewable type (`.pdf`,
+images, `.csv`, `.log`) opens in a viewer and the rest — archives included —
 only ever gets its folder opened. Nothing from a channel is ever executed.
 
 ## inbox/ (watcher → session)

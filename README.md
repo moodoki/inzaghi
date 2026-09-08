@@ -68,11 +68,12 @@ works exactly as well.
 
 ## Delivered files
 
-A session with something that is not prose — a report, a chart, a tarball of
-raw output — writes it into `notifications/attachments/` and points at it from
-the notification that explains it, as an ordinary Markdown link. The link text
-becomes the description. Selecting that entry lists what it delivered beneath
-the reader; `v` moves the cursor into the list and `enter` shows the file.
+A session with something that does not fit in a notification — a report, a
+chart, a tarball of raw output — writes it into `notifications/attachments/`
+and points at it from the notification that explains it, as an ordinary
+Markdown link. The link text becomes the description. Selecting that entry
+lists what it delivered beneath the reader; `v` moves the cursor into the list
+and `enter` shows the file.
 
 Nothing in that folder is read on its own. An attachment exists because a
 notification names it, which is what makes the two interesting states
@@ -81,15 +82,28 @@ in that order but not reliably, so a referenced file that is not there yet
 reads as *waiting on sync* rather than missing. It fills in a size when it
 lands, without disturbing whatever you were reading.
 
-Showing a file means launching something, and a channel is written by an
-unattended session and relayed by a sync client. So the rule is narrow: a
-known viewable type — `.pdf`, images, plain text — opens in the system viewer,
-and everything else, archives included, only ever gets its containing folder
-opened (`open -R` on macOS, `xdg-open` on the folder on Linux, which has no
-equivalent). Nothing from a channel is executed, and a reference that is
-absolute, climbs out of the folder, or is a symlink is refused and shown as
-refused rather than followed. Opening is reading, so a `read_only` channel
-allows it.
+What this reader can render, it renders. A delivered `.md` or `.txt` opens in
+a pane along the bottom of the reader, under the line that named it, and takes
+three quarters of it: asking for a file is asking to read it, and the
+notification keeps the quarter above. Drag the divider, or key it with `+` and
+`-`, to put the split somewhere else; `esc` closes the file. Nothing leaves
+the terminal for a format the terminal is made of. It is read afresh whenever
+a scan says the file changed, so a log a session is still writing stays
+current under you, and only the first 256 kB is shown — the file at the end of
+a reference was written unattended and is whatever it turned out to be.
+
+Everything else means launching something, and a channel is written by an
+unattended session and relayed by a sync client. So that rule is narrow: a
+known viewable type — `.pdf`, images, `.csv`, `.log` — opens in the system
+viewer, and everything else, archives included, only ever gets its containing
+folder opened (`open -R` on macOS, `xdg-open` on the folder on Linux, which
+has no equivalent). Nothing from a channel is executed, and a reference that
+is absolute, climbs out of the folder, or is a symlink is refused and shown as
+refused rather than followed — checked again when the file is read, not just
+when it was scanned. Every link is decided here too: the reader's Markdown
+widgets are built with `open_links=False`, or clicking one would hand its href
+to the browser before any of this had a say. Opening is reading, so a
+`read_only` channel allows it.
 
 Conflict copies inside `attachments/` are left alone: cleanup deletes text
 files it can recognise, and nothing points at a conflicted duplicate anyway.

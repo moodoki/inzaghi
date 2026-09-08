@@ -358,8 +358,41 @@ class InzaghiApp(App):
 
     @on(ChannelPane.Open)
     def _open_attachment(self, event: ChannelPane.Open) -> None:
-        """Show a delivered file. Reading, so a read-only channel allows it."""
-        self._launch(event.attachment)
+        """Show a delivered file. Reading, so a read-only channel allows it.
+
+        Two ways of showing one, decided by what the file is: a type this
+        reader renders is read into the bottom of the pane, and everything
+        else is handed to the desktop. Both wait on the channel's volume, so
+        both leave the UI thread here.
+        """
+        if event.attachment.disposition == "read":
+            self._read_attachment(event.channel_key, event.attachment, event.refresh)
+        else:
+            self._launch(event.attachment)
+
+    @work(thread=True, group="open")
+    def _read_attachment(self, key: str, attachment: Attachment, refresh: bool) -> None:
+        """Read a text delivery off the UI thread.
+
+        Not ``exclusive``: a poll can ask for a re-read while an earlier one is
+        still waiting on the sync client, and cancelling the earlier one would
+        leave whichever pane asked first showing text it has been told is
+        stale. Both land; the pane ignores the one it no longer wants.
+        """
+        try:
+            text, truncated = attach.read_text(attachment)
+        except attach.CannotOpen as exc:
+            self.call_from_thread(self.notify, str(exc), severity="error", timeout=20)
+            return
+        self.call_from_thread(self._previewed, key, attachment, text, truncated, refresh)
+
+    def _previewed(
+        self, key: str, attachment: Attachment, text: str, truncated: bool, refresh: bool
+    ) -> None:
+        pane = self._pane_for(key)
+        if pane is None:
+            return  # the tab went away while the volume was thinking
+        pane.show_preview(attachment, text, truncated, focus=not refresh)
 
     @work(thread=True, group="open")
     def _launch(self, attachment: Attachment) -> None:

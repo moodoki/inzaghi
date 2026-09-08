@@ -13,9 +13,10 @@ Health = Literal["fresh", "late", "stale", "unknown"]
 Direction = Literal["in", "out"]
 #: Whether a delivered file has arrived yet, or was refused on sight.
 Arrival = Literal["here", "syncing", "refused"]
-#: What showing one to a person means: hand it to the desktop, or only
-#: point a file manager at the folder it sits in.
-Disposition = Literal["view", "reveal"]
+#: What showing one to a person means: render it in the reader ourselves,
+#: hand it to the desktop, or only point a file manager at the folder it
+#: sits in.
+Disposition = Literal["read", "view", "reveal"]
 
 # How far past its own deadline a session must drift before "late" becomes
 # "probably dead".  Two missed windows: one can be a slow job, two is a pattern.
@@ -75,13 +76,23 @@ class Attachment:
     disposition: Disposition = "reveal"
     #: Bytes, once there are any to count.
     size: int | None = None
+    #: Last-modified time, once there is a file to ask.  Carried so that a
+    #: payload rewritten while it is being read is noticed by the scan that
+    #: everything else here is noticed by: the tuple simply stops comparing
+    #: equal, the same way a size filling in does.
+    mtime: float | None = None
     #: Why it was refused, in the words shown to the person reading.
     problem: str = ""
 
     @property
     def openable(self) -> bool:
-        """Only a file that is actually here can be handed to the desktop."""
+        """Only a file that is actually here can be shown at all."""
         return self.arrival == "here"
+
+    @property
+    def readable(self) -> bool:
+        """Whether showing it means rendering it in the reader ourselves."""
+        return self.arrival == "here" and self.disposition == "read"
 
 
 @dataclass(frozen=True, slots=True)

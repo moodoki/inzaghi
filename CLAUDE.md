@@ -27,14 +27,17 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/parse.py     pure parsers over filenames and Markdown prose
     src/inzaghi/model.py     Doc, Event, Heartbeat, Status, Thread, Snapshot
     src/inzaghi/channel.py   folder -> Snapshot, with a content cache
-    src/inzaghi/attach.py    files a notification delivers, and launching them
+    src/inzaghi/attach.py    files a notification delivers: what one is,
+                             reading a text one, launching the rest
     src/inzaghi/config.py    TOML config, root scanning, discovery
     src/inzaghi/state.py     local read receipts (never written into a channel)
     src/inzaghi/compose.py   atomic writes into inbox/
     src/inzaghi/skill.py     installing the protocol into an agent harness
     src/inzaghi/skills/      the session-side skill, shipped as package data
     src/inzaghi/ui/          Textual app (composer.py is the inline draft box,
-                             mounting.py guards the timed refreshes)
+                             preview.py the reader's bottom pane for a
+                             delivered text file, mounting.py guards the
+                             timed refreshes)
 
 Installed as two console scripts, `inzaghi` and the `inz` alias, both pointing
 at `cli:main`; `cli._prog()` reports whichever name was typed.
@@ -64,9 +67,19 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   in `notifications/attachments/` is invisible on purpose. Resolution happens
   per scan, never in the `Doc` cache: the prose does not change when the
   payload lands. A referenced file that is absent is `syncing`, never missing.
-- Only `attach.VIEWABLE` types are handed to the system viewer; everything else
-  gets its folder revealed. It is a whitelist so that a type nobody considered
-  lands on the safe side -- a channel is written by an unattended session.
+- `attach.READABLE` types (`.md`, `.txt`) are rendered in `ui/preview.py`, the
+  resizable pane along the bottom of the reader, which an opened file gets
+  three quarters of; only `attach.VIEWABLE` types are handed to the system
+  viewer, and everything else gets its folder revealed. Both are whitelists so
+  that a type nobody considered lands on the safe side -- a channel is written
+  by an unattended session. `read_text` re-validates the path it was given for
+  the same reason `remove_conflicts` does: the snapshot is a poll old.
+- Every `Markdown` widget is constructed `open_links=False`. Left on, the
+  widget answers a clicked link itself by calling `app.open_url` -- the
+  browser, or `xdg-open` -- and it does that before the click bubbles this
+  far, so the whitelist above never gets asked. A test posts `LinkClicked` at
+  the widget, not at the pane, because posting it at the pane skips the
+  handler that used to be wrong.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by
   option id, not index: the list also holds separators and the divider.

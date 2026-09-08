@@ -113,6 +113,10 @@ works for a file the prose has no natural place to mention.
 - **Keep it small enough to finish syncing.** A 400 MB tarball still uploading
   when the run ends never arrives. Prefer a summary you wrote yourself over
   raw output the watcher would have to unpack.
+- **Markdown and `.txt` are read in place**, in a pane beneath the notification
+  rather than in some other application. So a report too long for a
+  notification body is better delivered as `report.md` than trimmed down to
+  fit; anything else opens outside the terminal, or only has its folder shown.
 - Do not deliver anything as a substitute for saying what happened. The
   notification still has to stand on its own if the file never turns up.
 
