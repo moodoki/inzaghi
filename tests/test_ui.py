@@ -666,6 +666,39 @@ async def test_a_bird_nobody_can_see_does_not_blink(channel_root):
         assert str(app.screen.query_one("#pigeon", Static).content) == PIGEON
 
 
+def test_a_pane_that_has_not_composed_yet_survives_a_refresh(channel_root):
+    """Both refreshes fire on timers, and mounting a dozen panes is not instant.
+
+    The regression: a config naming enough channels leaves a pane created but
+    still empty when the one-second tick reaches it, and the query for a child
+    that does not exist yet took the whole app down.
+    """
+    channel = channel_module.Channel(root=channel_root)
+    snapshot = channel.scan()
+    now = snapshot.scanned_at
+
+    pane = ChannelPane(channel)
+    pane.update(snapshot, set(), now)
+    pane.update_strip(now)
+    assert pane.snapshot is snapshot  # kept, to be written out once mounted
+
+    OverviewPane().update([channel], {channel.key: snapshot}, {}, now)
+
+
+async def test_the_first_tick_can_beat_the_tabs_onto_the_screen(channel_root, monkeypatch):
+    """The regression, one level up: the tick fired before any tab existed.
+
+    Driven by making compose() produce nothing, which is what a slow mount
+    looks like from the timer's point of view.
+    """
+    app = make_app(channel_root)
+    monkeypatch.setattr(InzaghiApp, "compose", lambda self: iter(()))
+    async with app.run_test() as pilot:
+        app._tick()  # would have taken the app down
+        app._refresh_widgets(datetime.now().astimezone())
+        await pilot.pause()
+
+
 async def test_the_pigeon_never_costs_a_channel_a_row(tmp_path):
     """Decoration yields to data: enough channels and the bird goes away."""
     from inzaghi.protocol import init_channel

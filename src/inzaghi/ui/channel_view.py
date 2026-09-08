@@ -16,6 +16,7 @@ from .. import fmt
 from ..channel import Channel
 from ..model import Snapshot
 from .composer import Composer
+from .mounting import composed
 from .rows import (
     ALL,
     HEALTH_STYLE,
@@ -74,6 +75,7 @@ class ChannelPane(Vertical):
         super().__init__(**kwargs)
         self.channel = channel
         self.snapshot: Snapshot | None = None
+        self._unread: set[str] = set()
         self.filter = Filter()
         self._all_rows: list[Row] = []
         self._rows: list[Row] = []
@@ -100,9 +102,14 @@ class ChannelPane(Vertical):
 
     def on_mount(self) -> None:
         self.query_one("#search", Input).display = False
+        if self.snapshot is not None:  # a scan that landed while mounting
+            self.update(self.snapshot, self._unread, self.snapshot.scanned_at)
 
     def update(self, snapshot: Snapshot, unread: set[str], now: datetime) -> None:
         self.snapshot = snapshot
+        self._unread = unread
+        if not composed(self, "#strip"):
+            return  # kept, and written out by on_mount above
         self._all_rows = build_rows(snapshot, unread, now)
         self._apply_filter()
         self.update_strip(now)
@@ -185,7 +192,7 @@ class ChannelPane(Vertical):
     def update_strip(self, now: datetime) -> None:
         """Refresh only the liveness line, which changes every second."""
         snapshot = self.snapshot
-        if snapshot is None:
+        if snapshot is None or not composed(self, "#strip"):
             return
         mark, colour = HEALTH_STYLE[snapshot.health(now)]
         heartbeat = snapshot.heartbeat

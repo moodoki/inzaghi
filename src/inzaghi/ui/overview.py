@@ -19,6 +19,7 @@ from textual.widgets import DataTable, Static
 from .. import fmt
 from ..channel import Channel
 from ..model import Snapshot
+from .mounting import composed
 from .rows import HEALTH_STYLE
 
 _COLUMNS = ("", "channel", "heartbeat", "next update", "", "state")
@@ -83,6 +84,8 @@ class OverviewPane(Vertical):
         unread: dict[str, set[str]],
         now: datetime,
     ) -> None:
+        if not composed(self, "#overview-table"):
+            return
         table = self.query_one(DataTable)
         cursor = table.cursor_row
         table.clear()

@@ -28,10 +28,13 @@ from ..model import LOUD_KINDS, Snapshot
 from ..state import ReadState
 from .channel_view import ChannelPane
 from .modals import ConfirmScreen
+from .mounting import composed
 from .overview import OverviewPane
 from .rows import HEALTH_STYLE
 
 OVERVIEW_ID = "overview"
+#: Inside OverviewPane; its presence answers for the whole overview subtree.
+OVERVIEW_TABLE = "#overview-table"
 
 
 class InzaghiApp(App):
@@ -224,16 +227,23 @@ class InzaghiApp(App):
             if pane is not None:
                 pane.update(snapshot, unread, now)
             self._badge(channel, snapshot, len(unread), now)
-        self.query_one(OverviewPane).update(self.channels, self.snapshots, unread_paths, now)
+        if composed(self, OVERVIEW_TABLE):
+            self.query_one(OverviewPane).update(self.channels, self.snapshots, unread_paths, now)
         # check_action() results are cached, so the footer would keep offering
         # "k Clean" after the last conflict copy was deleted.
         self.refresh_bindings()
 
     def _tick(self) -> None:
-        """Cheap per-second refresh: countdowns only, no disk access."""
+        """Cheap per-second refresh: countdowns only, no disk access.
+
+        The first of these fires one second in, which is not always long
+        enough for the tabs to have mounted -- see ``ui.mounting``.
+        """
         now = datetime.now().astimezone()
         for pane in self.query(ChannelPane):
             pane.update_strip(now)
+        if not composed(self, OVERVIEW_TABLE):
+            return
         unread = {
             channel.key: {str(event.path) for event in self.state.unread(channel.key, snapshot)}
             for channel in self.channels

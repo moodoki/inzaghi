@@ -32,7 +32,8 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/compose.py   atomic writes into inbox/
     src/inzaghi/skill.py     installing the protocol into an agent harness
     src/inzaghi/skills/      the session-side skill, shipped as package data
-    src/inzaghi/ui/          Textual app (composer.py is the inline draft box)
+    src/inzaghi/ui/          Textual app (composer.py is the inline draft box,
+                             mounting.py guards the timed refreshes)
 
 Installed as two console scripts, `inzaghi` and the `inz` alias, both pointing
 at `cli:main`; `cli._prog()` reports whichever name was typed.
@@ -53,6 +54,11 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   `absence_is_real` will vouch for. Never per file -- a notification missing
   from one scan of a synced folder is late at least as often as it is gone.
 - `check_action` returning `False` hides a binding; `None` only dims it.
+- A timed refresh -- the poll, the one-second tick -- can land before the
+  widgets it writes into exist, or after they have gone: a dozen channels take
+  longer than a second to mount, and removing a tab frees a pane's children
+  before the pane. Guard every one with `ui.mounting.composed`, in the app as
+  well as in each pane; do not query and hope.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by
   option id, not index: the list also holds separators and the divider.
