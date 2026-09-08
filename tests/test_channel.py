@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from conftest import NOW, TZ, write
+from inzaghi import compose
 from inzaghi.channel import Channel, is_channel
 from inzaghi.config import scan_root
 
@@ -180,6 +181,32 @@ def test_sent_message_is_threaded_with_its_ack(channel):
     # Sent at 12:28 by mtime, picked up at 23:04 by the stamp added on the move.
     assert thread.picked_up == datetime(2026, 9, 4, 23, 4).astimezone()
     assert thread.round_trip == timedelta(hours=10, minutes=36)
+
+
+def test_a_message_this_app_sent_is_threaded_with_its_ack(channel, channel_root):
+    """The regression: the fixture above starts from an unstamped filename.
+
+    Every message Inzaghi writes is already stamped, and the session prefixes
+    the pickup time onto that, so the name in ``done/`` carries two stamps
+    while the ack quotes the one-stamp name it was given. The thread used to
+    stop at "picked up" and never reach "acked".
+    """
+    for path in (channel_root / "inbox" / "done").iterdir():
+        path.unlink()  # the fixture's own thread, out of the way
+    for path in (channel_root / "notifications").glob("*_ack_*.md"):
+        path.unlink()
+
+    sent = compose.send(channel, "PAUSE", slug="pause", now=datetime(2026, 9, 5, 1, 30))
+    moved = channel_root / "inbox" / "done" / f"2026-09-05_0200_{sent.name}"
+    sent.rename(moved)
+    write(
+        channel_root / "notifications" / "2026-09-05_0201_ack_re-pause.md",
+        f"# [ack] re: {sent.name}\n\nPaused after shard 3.\n",
+    )
+
+    (thread,) = channel.scan(now=NOW).threads
+    assert thread.state == "acked"
+    assert thread.picked_up == datetime(2026, 9, 5, 2, 0).astimezone()
 
 
 def test_unanswered_message_in_inbox_is_in_flight(channel, channel_root):

@@ -38,6 +38,10 @@ def test_unconventional_filename_still_parses():
         ("2026-09-04-heartbeat.md", "re: 2026-09-04-heartbeat.md"),
         ("2026-09-04-heartbeat.md", "re-2026-09-04-heartbeat-md"),
         ("2026-09-04_2304_pause-gpu.md", "pause-gpu"),
+        # What the app itself produces: Inzaghi stamps the message, then the
+        # session stamps the pickup time onto that when it moves the file.
+        ("2026-09-05_1200_2026-09-05_1130_pause.md", "re: 2026-09-05_1130_pause.md"),
+        ("2026-09-05_1200_2026-09-05_1130_pause.md", "2026-09-05_1130_pause.md"),
     ],
 )
 def test_refs_normalise_to_the_same_key(left, right):
