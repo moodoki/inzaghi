@@ -12,9 +12,9 @@ from textual.binding import Binding
 from textual.widgets import Input, Markdown, OptionList, Static
 from textual.widgets.option_list import Option, OptionDoesNotExist
 
-from .. import fmt
+from .. import attach, fmt
 from ..channel import Channel
-from ..model import Snapshot
+from ..model import Attachment, Snapshot
 from .composer import Composer
 from .mounting import composed
 from .rows import (
@@ -22,12 +22,18 @@ from .rows import (
     HEALTH_STYLE,
     Filter,
     Row,
+    attachment_label,
     build_rows,
     divider_label,
     filter_bar,
     kind_cycle,
     unread_divider,
 )
+
+#: Two option lists live in this pane, and every handler below has to say
+#: which one it means.
+TIMELINE = "timeline"
+ATTACHMENTS = "attachments"
 
 def _line(markup: str) -> Text:
     """One row, clipped rather than wrapped: the timeline is a list, not prose."""
@@ -56,6 +62,18 @@ class ChannelPane(Vertical):
             self.channel_key = channel_key
             self.text = text
 
+    class Open(Message):
+        """An attachment someone asked to see, on its way to the app.
+
+        The app owns it for the same reason it owns writes: showing a file
+        means launching something, and that waits on the channel's volume.
+        """
+
+        def __init__(self, channel_key: str, attachment: Attachment) -> None:
+            super().__init__()
+            self.channel_key = channel_key
+            self.attachment = attachment
+
     class Read(Message):
         """A row was displayed long enough to count as read."""
 
@@ -69,6 +87,7 @@ class ChannelPane(Vertical):
         Binding("f", "cycle_kind", "Filter"),
         Binding("F", "cycle_kind(-1)", "Filter back", show=False),
         Binding("escape", "clear_filter", "Clear filter", show=False),
+        Binding("v", "attachments", "Files"),
     ]
 
     def __init__(self, channel: Channel, **kwargs) -> None:
@@ -86,6 +105,10 @@ class ChannelPane(Vertical):
         #: (key, mtime, size) of what the reader is showing, so an unchanged
         #: document is never re-rendered and never scrolled back to the top.
         self._showing: tuple | None = None
+        #: What the strip beneath the reader is listing, and for which row.
+        #: Tracked apart from the document: an attachment arrives long after
+        #: the notification that announced it, and only the strip changes.
+        self._attachments: tuple[Attachment, ...] = ()
 
     def compose(self) -> ComposeResult:
         yield Static("", id="strip", markup=True)
@@ -93,15 +116,20 @@ class ChannelPane(Vertical):
         yield Input(placeholder="search this channel", id="search")
         with Horizontal(id="channel-body"):
             with Vertical(id="left"):
-                yield OptionList(id="timeline")
+                yield OptionList(id=TIMELINE)
                 yield Composer(id="composer")
-            with VerticalScroll(id="reader"):
-                yield Markdown(_EMPTY, id="doc")
+            with Vertical(id="reader-column"):
+                with VerticalScroll(id="reader"):
+                    yield Markdown(_EMPTY, id="doc")
+                # Outside the scroll: what a notification delivered belongs to
+                # the notification, not to whatever part of it is on screen.
+                yield OptionList(id=ATTACHMENTS)
 
     # -- updating ---------------------------------------------------------
 
     def on_mount(self) -> None:
         self.query_one("#search", Input).display = False
+        self.query_one(f"#{ATTACHMENTS}", OptionList).display = False
         if self.snapshot is not None:  # a scan that landed while mounting
             self.update(self.snapshot, self._unread, self.snapshot.scanned_at)
 
@@ -132,16 +160,25 @@ class ChannelPane(Vertical):
         if (signature, divider) != (self._signature, self._divider):
             self._signature, self._divider = signature, divider
             self._labels = labels
-            self._render_rows()
-        elif labels != self._labels:
-            self._retitle(labels)
+            self._render_rows()  # ends by showing the row it restored
+        else:
+            if labels != self._labels:
+                self._retitle(labels)
+            # Whether or not the list moved, what the *selected* entry holds
+            # may have. A rewritten status file and a payload that has just
+            # finished syncing both leave the timeline identical. ``_show``
+            # compares before it writes, so this costs nothing when nothing
+            # changed -- which is most polls.
+            selected = self._row_for(self._selected)
+            if selected is not None:
+                self._show(selected)
 
         searched = self.filter.with_kind(ALL).apply(self._all_rows)
         self.query_one("#filterbar", Static).update(filter_bar(searched, self.filter))
 
     def _retitle(self, labels: list[str]) -> None:
         """Rewrite changed row labels in place, leaving the cursor alone."""
-        timeline = self.query_one(OptionList)
+        timeline = self.query_one(f"#{TIMELINE}", OptionList)
         for row, label, previous in zip(self._rows, labels, self._labels):
             if label == previous:
                 continue
@@ -153,7 +190,7 @@ class ChannelPane(Vertical):
         self._labels = labels
 
     def _render_rows(self) -> None:
-        timeline = self.query_one(OptionList)
+        timeline = self.query_one(f"#{TIMELINE}", OptionList)
         # Read the selection before clearing: emptying and refilling the list
         # highlights the first row, which fires the handler below and would
         # otherwise overwrite the very thing being restored.
@@ -220,7 +257,7 @@ class ChannelPane(Vertical):
     # -- selection --------------------------------------------------------
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        if event.option.id is None:
+        if event.option_list.id != TIMELINE or event.option.id is None:
             return
         self._selected = event.option.id
         row = self._row_for(event.option.id)
@@ -228,6 +265,36 @@ class ChannelPane(Vertical):
             self._show(row)
             if row.unread:
                 self.post_message(self.Read(self.channel.key, row.key))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Enter, or a click, on a delivered file asks to see it."""
+        if event.option_list.id != ATTACHMENTS:
+            return
+        event.stop()
+        self._open(self._attachment_at(event.option_index))
+
+    def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
+        """A reference in the prose opens the same file the strip would.
+
+        Where the session wrote the link is where someone's eye lands, so it
+        has to work from there too. Anything else the document links to is
+        left alone -- this is a channel reader, not a browser.
+        """
+        event.stop()
+        name = attach.link_name(event.href)
+        self._open(next((a for a in self._attachments if a.name == name), None))
+
+    def _open(self, attachment: Attachment | None) -> None:
+        """Hand one delivery up to the app, or say why it cannot be shown."""
+        if attachment is None:
+            return
+        if not attachment.openable:
+            self.notify(
+                attachment.problem or f"{attachment.name} has not arrived yet",
+                severity="warning",
+            )
+            return
+        self.post_message(self.Open(self.channel.key, attachment))
 
     def _show(self, row: Row) -> None:
         """Put a document in the reader, scrolling only when it is a new one.
@@ -237,13 +304,43 @@ class ChannelPane(Vertical):
         refreshes it would make it unreadable.
         """
         stamp = (row.key, row.doc.mtime, row.doc.size)
-        if stamp == self._showing:
+        if stamp != self._showing:
+            is_new_document = self._showing is None or self._showing[0] != row.key
+            self._showing = stamp
+            self.query_one("#doc", Markdown).update(row.doc.body or _EMPTY)
+            if is_new_document:
+                self.query_one("#reader", VerticalScroll).scroll_home(animate=False)
+        # Checked separately from the document above: a payload lands minutes
+        # after the notification that announced it, and re-rendering the prose
+        # for that would throw away the reader's place for nothing.
+        self._show_attachments(row.attachments)
+
+    def _show_attachments(self, attachments: tuple[Attachment, ...]) -> None:
+        """Refill the strip beneath the reader, only when it would differ.
+
+        Compared by value, so ``waiting on sync`` becoming a size rewrites the
+        line, while a poll that found the same files again leaves the cursor
+        where it was.
+        """
+        if attachments == self._attachments:
             return
-        is_new_document = self._showing is None or self._showing[0] != row.key
-        self._showing = stamp
-        self.query_one("#doc", Markdown).update(row.doc.body or _EMPTY)
-        if is_new_document:
-            self.query_one("#reader", VerticalScroll).scroll_home(animate=False)
+        self._attachments = attachments
+        listing = self.query_one(f"#{ATTACHMENTS}", OptionList)
+        listing.clear_options()
+        listing.display = bool(attachments)
+        if not attachments:
+            if listing.has_focus:
+                self.focus_timeline()
+            self.refresh_bindings()
+            return
+        listing.add_options([Option(_line(attachment_label(a))) for a in attachments])
+        listing.highlighted = 0
+        self.refresh_bindings()
+
+    def _attachment_at(self, index: int | None) -> Attachment | None:
+        if index is None or not 0 <= index < len(self._attachments):
+            return None
+        return self._attachments[index]
 
     def _row_for(self, key: str) -> Row | None:
         return next((row for row in self._rows if row.key == key), None)
@@ -252,6 +349,22 @@ class ChannelPane(Vertical):
         if key is None:
             return None
         return next((i for i, row in enumerate(self._rows) if row.key == key), None)
+
+    def action_attachments(self) -> None:
+        """Put the cursor on the files this entry delivered."""
+        listing = self.query_one(f"#{ATTACHMENTS}", OptionList)
+        if listing.display:
+            listing.focus()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Hide the files key on an entry that delivered none.
+
+        ``False`` rather than ``None``: most notifications are prose only, so a
+        greyed-out key would sit in the footer nearly all the time.
+        """
+        if action == "attachments":
+            return bool(self._attachments)
+        return True
 
     # -- filtering --------------------------------------------------------
 
@@ -292,7 +405,7 @@ class ChannelPane(Vertical):
         self.focus_timeline()
 
     def focus_timeline(self) -> None:
-        self.query_one(OptionList).focus()
+        self.query_one(f"#{TIMELINE}", OptionList).focus()
 
     # -- composing --------------------------------------------------------
 

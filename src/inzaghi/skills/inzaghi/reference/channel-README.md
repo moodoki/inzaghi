@@ -2,7 +2,7 @@
 
 This folder is the link between the session running the **<project>** project and
 whoever is watching it from elsewhere. It is synced, so either end can be
-offline when the other writes. Protocol v1 (Inzaghi).
+offline when the other writes. Protocol v2 (Inzaghi).
 
 Everything is plain UTF-8 Markdown. Timestamps are ISO-8601 with an offset.
 Write every file atomically — to a temporary name in the same directory, then
@@ -35,6 +35,41 @@ Everything else is an **append-only log**, one file per event, named
 Start each with a `# [kind] Title` heading. An `ack` must cite the message it
 answers as `# [ack] re: <inbox filename>` and quote it, so the two can be
 threaded back together.
+
+## notifications/attachments/ (session → watcher)
+
+Anything that is not Markdown — a PDF, a tarball, a chart — goes here, and the
+notification that explains it points at it:
+
+```
+Numbers behind this: [raw criterion output, 12 runs](attachments/bench.tar.gz)
+and ![the three charts](attachments/regression.png).
+```
+
+The link text is the description the watcher sees, so make it say what the file
+is. A flat `attachments: bench.tar.gz, regression.png` front-matter key works
+too, for a file the prose has no natural place to mention; names there are
+comma-separated, so one containing a comma has to be linked from the prose
+instead.
+
+Rules, all of them consequences of the folder being synced and read later:
+
+* **Reference every file you deliver.** A file nobody points at is ignored
+  completely — not shown, not counted. That is deliberate: it is how a payload
+  still crossing the sync is told apart from one that has arrived, and how a
+  leftover from three runs ago stays out of the way.
+* **Write the payload before the notification that names it**, and expect the
+  watcher to receive them in the other order anyway. Until the bytes land, the
+  attachment shows as waiting on sync. Nothing is lost by being early.
+* **Name files, not paths.** `attachments/report.pdf`, or `report.pdf` in the
+  header. A reference that climbs out of the folder, or is absolute, or is a
+  symlink, is refused and shown as refused.
+* **Keep them small enough to sync.** A payload the client is still uploading
+  when the run ends never arrives.
+
+The watcher opens these with the desktop, so a known viewable type (`.pdf`,
+images, plain text) opens in a viewer and everything else — archives included —
+only ever gets its folder opened. Nothing from a channel is ever executed.
 
 ## inbox/ (watcher → session)
 

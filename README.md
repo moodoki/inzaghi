@@ -47,6 +47,8 @@ One folder per project, shared with one session:
     2026-09-04_2325_milestone_<slug>.md
                                 append-only log; kinds are milestone,
                                 phase-summary, ack, hard-stop, error
+    attachments/                files a notification delivers, named by the
+                                notification that explains them
   inbox/                        you -> session
     2026-09-05_1130_pause-gpu-jobs.md
     done/                       the session moves messages here once read,
@@ -63,6 +65,34 @@ Files stay plain Markdown. Inzaghi reads structure out of filenames and prose, a
 accepts an optional YAML front-matter block (`kind`, `ts`, `next_by`,
 `needs_reply`) when a session cares to emit one — a channel that never does
 works exactly as well.
+
+## Delivered files
+
+A session with something that is not prose — a report, a chart, a tarball of
+raw output — writes it into `notifications/attachments/` and points at it from
+the notification that explains it, as an ordinary Markdown link. The link text
+becomes the description. Selecting that entry lists what it delivered beneath
+the reader; `v` moves the cursor into the list and `enter` shows the file.
+
+Nothing in that folder is read on its own. An attachment exists because a
+notification names it, which is what makes the two interesting states
+distinguishable: the payload and the prose cross the sync separately, usually
+in that order but not reliably, so a referenced file that is not there yet
+reads as *waiting on sync* rather than missing. It fills in a size when it
+lands, without disturbing whatever you were reading.
+
+Showing a file means launching something, and a channel is written by an
+unattended session and relayed by a sync client. So the rule is narrow: a
+known viewable type — `.pdf`, images, plain text — opens in the system viewer,
+and everything else, archives included, only ever gets its containing folder
+opened (`open -R` on macOS, `xdg-open` on the folder on Linux, which has no
+equivalent). Nothing from a channel is executed, and a reference that is
+absolute, climbs out of the folder, or is a symlink is refused and shown as
+refused rather than followed. Opening is reading, so a `read_only` channel
+allows it.
+
+Conflict copies inside `attachments/` are left alone: cleanup deletes text
+files it can recognise, and nothing points at a conflicted duplicate anyway.
 
 ## Discovery
 
@@ -157,5 +187,5 @@ regenerates). Supporting another harness is one entry in `skill.HARNESSES`.
 
 Working: overview, per-channel tabs, timeline, reader, composer, quick actions,
 search and kind filtering, live discovery, and the `inzaghi ls | init | send |
-status` commands, the since-last-read divider, sync-conflict cleanup, and the
-session-side skill.
+status` commands, the since-last-read divider, sync-conflict cleanup, delivered
+files, and the session-side skill.

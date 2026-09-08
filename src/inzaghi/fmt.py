@@ -1,4 +1,5 @@
-"""Human-scale time formatting.
+"""Human-scale formatting of the two quantities a channel deals in: time, and
+the size of a file it delivered.
 
 Everything in a channel is minutes-to-days old, and the questions are always
 relative ones -- how long ago, how long until -- so absolute timestamps are the
@@ -56,3 +57,16 @@ def countdown(deadline: datetime | None, now: datetime) -> str:
     if remaining > timedelta(0):
         return f"due in {duration(remaining, precise=True)}"
     return f"overdue {duration(remaining, precise=True)}"
+
+
+_SCALES = ((1 << 30, "GB"), (1 << 20, "MB"), (1 << 10, "kB"))
+
+
+def size(byte_count: int | None) -> str:
+    """``2.4 MB`` -- one decimal place, because that is all anyone reads."""
+    if byte_count is None:
+        return "—"
+    for scale, suffix in _SCALES:
+        if byte_count >= scale:
+            return f"{byte_count / scale:.1f} {suffix}"
+    return f"{byte_count} B"

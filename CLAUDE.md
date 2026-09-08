@@ -27,6 +27,7 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/parse.py     pure parsers over filenames and Markdown prose
     src/inzaghi/model.py     Doc, Event, Heartbeat, Status, Thread, Snapshot
     src/inzaghi/channel.py   folder -> Snapshot, with a content cache
+    src/inzaghi/attach.py    files a notification delivers, and launching them
     src/inzaghi/config.py    TOML config, root scanning, discovery
     src/inzaghi/state.py     local read receipts (never written into a channel)
     src/inzaghi/compose.py   atomic writes into inbox/
@@ -59,9 +60,20 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   longer than a second to mount, and removing a tab frees a pane's children
   before the pane. Guard every one with `ui.mounting.composed`, in the app as
   well as in each pane; do not query and hope.
+- An attachment exists only because a notification references it; a bare file
+  in `notifications/attachments/` is invisible on purpose. Resolution happens
+  per scan, never in the `Doc` cache: the prose does not change when the
+  payload lands. A referenced file that is absent is `syncing`, never missing.
+- Only `attach.VIEWABLE` types are handed to the system viewer; everything else
+  gets its folder revealed. It is a whitelist so that a type nobody considered
+  lands on the safe side -- a channel is written by an unattended session.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by
   option id, not index: the list also holds separators and the divider.
+- The reader is refreshed on every poll regardless, because the selected
+  entry's *contents* can change while its row does not: a rewritten status
+  file, or an attachment that has finished syncing. `_show` compares before it
+  writes, so a poll that found nothing new costs nothing.
 - The skill's `reference/channel-README.md` is generated from
   `protocol.CHANNEL_README`; a test guards the drift, `inz skill sync` fixes it.
 - `uv run --with pytest pytest -q` to run the suite.

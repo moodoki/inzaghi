@@ -21,10 +21,11 @@ If `inz` (or `inzaghi`) is on PATH:
 inz init <channel-path> --name <project>
 ```
 
-That creates `notifications/`, `inbox/`, `inbox/done/` and writes the contract
-into `README.md`. Otherwise create those three directories yourself and copy
-`reference/channel-README.md` (beside this file) to `<channel-path>/README.md`,
-replacing `<project>` with the project name.
+That creates `notifications/`, `notifications/attachments/`, `inbox/`,
+`inbox/done/` and writes the contract into `README.md`. Otherwise create those
+four directories yourself and copy `reference/channel-README.md` (beside this
+file) to `<channel-path>/README.md`, replacing `<project>` with the project
+name.
 
 The channel path belongs in a synced folder, not in the repository. Ask where it
 should live if it is not already obvious or specified.
@@ -81,6 +82,39 @@ quote it back, so the two can be threaded together at the other end.
 
 Write each one so it makes sense to someone who has not read the others.
 Numbers, not adjectives: what ran, what came out, what it means, what is next.
+
+## Delivering a file
+
+Anything that is not Markdown — a report, a chart, a tarball of raw output —
+goes in `notifications/attachments/`, and the notification that explains it
+points at it:
+
+```markdown
+# [phase-summary] Bench sweep closed
+
+p95 down 18% on the reordered index. Numbers behind that:
+[raw criterion output, 12 runs](attachments/bench-2026-09-08.tar.gz), and
+![the three latency charts](attachments/regression.png).
+```
+
+The link text is the description the watcher reads before deciding whether to
+open the file, so make it say what the file *is* — not "attachment" or
+"see here". A flat `attachments: bench.tar.gz, regression.png` front-matter key
+works for a file the prose has no natural place to mention.
+
+- **Point at everything you deliver.** A file nobody references is ignored
+  entirely. That is how a payload still crossing the sync is told apart from
+  one that has arrived — and how last week's leftovers stay out of the way.
+- **Write the payload first**, then the notification naming it. Expect the
+  watcher to receive them in the other order anyway; until the bytes land the
+  attachment reads as waiting on sync, which costs nothing.
+- **Names, not paths.** A reference that climbs out of the folder, or is
+  absolute, or is a symlink, is refused and shown as refused.
+- **Keep it small enough to finish syncing.** A 400 MB tarball still uploading
+  when the run ends never arrives. Prefer a summary you wrote yourself over
+  raw output the watcher would have to unpack.
+- Do not deliver anything as a substitute for saying what happened. The
+  notification still has to stand on its own if the file never turns up.
 
 ## Hard stops
 

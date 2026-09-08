@@ -11,6 +11,11 @@ from . import parse
 
 Health = Literal["fresh", "late", "stale", "unknown"]
 Direction = Literal["in", "out"]
+#: Whether a delivered file has arrived yet, or was refused on sight.
+Arrival = Literal["here", "syncing", "refused"]
+#: What showing one to a person means: hand it to the desktop, or only
+#: point a file manager at the folder it sits in.
+Disposition = Literal["view", "reveal"]
 
 # How far past its own deadline a session must drift before "late" becomes
 # "probably dead".  Two missed windows: one can be a slow job, two is a pattern.
@@ -50,6 +55,33 @@ class Doc:
         text = path.read_text(encoding="utf-8", errors="replace")
         meta, body = parse.split_front_matter(text)
         return cls(path=path, text=text, meta=meta, body=body, mtime=stat.st_mtime, size=stat.st_size)
+
+
+@dataclass(frozen=True, slots=True)
+class Attachment:
+    """A file a notification delivered, and whether it is here yet.
+
+    Resolved fresh on every scan rather than cached with the document that
+    names it: the prose does not change when the payload finally lands.
+    """
+
+    #: As the notification wrote it, relative to the attachments folder.
+    name: str
+    #: Where it belongs in the channel.  Meaningless when ``refused``.
+    path: Path
+    #: The session's own description of the file, if it gave one.
+    note: str = ""
+    arrival: Arrival = "syncing"
+    disposition: Disposition = "reveal"
+    #: Bytes, once there are any to count.
+    size: int | None = None
+    #: Why it was refused, in the words shown to the person reading.
+    problem: str = ""
+
+    @property
+    def openable(self) -> bool:
+        """Only a file that is actually here can be handed to the desktop."""
+        return self.arrival == "here"
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +247,10 @@ class Snapshot:
     threads: list[Thread] = field(default_factory=list)  # outbound, newest first
     conflicts: list[Path] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    #: Files each notification delivers, keyed by the notification's own path.
+    #: Only notifications carry these: a file nobody points at is not a
+    #: delivery, and nothing outside ``notifications/`` may name one.
+    attachments: dict[Path, tuple[Attachment, ...]] = field(default_factory=dict)
     #: Slack allowed past a promised heartbeat before it counts as late.
     grace: timedelta = DEFAULT_GRACE
 

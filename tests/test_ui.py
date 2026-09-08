@@ -81,7 +81,7 @@ async def test_reading_a_row_clears_it_from_unread(channel_root):
         assert len(app.state.unread(key, app.snapshots[key])) == 2
         app.query_one("#tabs", TabbedContent).active = "ch0"
         await pilot.pause()
-        timeline = app.query_one(OptionList)
+        timeline = app.query_one("#timeline", OptionList)
         timeline.highlighted = timeline.get_option_index(
             str(app.snapshots[key].events[0].path)
         )
@@ -523,7 +523,7 @@ async def test_the_composer_leaves_the_reader_on_screen(channel_root):
         assert isinstance(app.screen, type(app.screen))  # no modal was pushed
         assert app.screen.query_one(Composer).display is True
         assert app.screen.query_one("#reader").display is True
-        assert app.screen.query_one(OptionList).display is True
+        assert app.screen.query_one("#timeline", OptionList).display is True
 
 
 async def test_a_draft_survives_going_back_to_read_something(channel_root):
@@ -539,7 +539,7 @@ async def test_a_draft_survives_going_back_to_read_something(channel_root):
 
         await pilot.press("escape")  # back to the list
         await pilot.pause()
-        assert app.screen.query_one(OptionList).has_focus
+        assert app.screen.query_one("#timeline", OptionList).has_focus
         assert composer.display is True and composer.text == "half a thought"
 
         await pilot.press("down", "down")  # read something else

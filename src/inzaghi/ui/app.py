@@ -19,12 +19,13 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
+from .. import attach
 from .. import compose as composer
 from .. import fmt
 from ..channel import Channel, absence_is_real, remove_conflicts
 from ..compose import QUICK_ACTIONS, QUICK_BY_KEYWORD, QuickAction, ReadOnlyChannel
 from ..config import Config
-from ..model import LOUD_KINDS, Snapshot
+from ..model import LOUD_KINDS, Attachment, Snapshot
 from ..state import ReadState
 from .channel_view import ChannelPane
 from .modals import ConfirmScreen
@@ -354,6 +355,32 @@ class InzaghiApp(App):
             if str(item.path) == event.path:
                 self.state.mark_read(event.channel_key, item)
                 break
+
+    @on(ChannelPane.Open)
+    def _open_attachment(self, event: ChannelPane.Open) -> None:
+        """Show a delivered file. Reading, so a read-only channel allows it."""
+        self._launch(event.attachment)
+
+    @work(thread=True, group="open")
+    def _launch(self, attachment: Attachment) -> None:
+        """Hand the file to the desktop off the UI thread.
+
+        The launcher usually returns at once, but it is pointed at a path on a
+        synced volume: macOS ``open`` on a file iCloud has evicted waits for
+        the download before it hands anything over.
+        """
+        try:
+            command = attach.launch(attachment)
+        except attach.CannotOpen as exc:
+            self.call_from_thread(self.notify, str(exc), severity="error", timeout=20)
+            return
+        self.call_from_thread(self._opened, attachment, command)
+
+    def _opened(self, attachment: Attachment, command: list[str]) -> None:
+        verb = "Opening" if attachment.disposition == "view" else "Showing"
+        where = "" if attachment.disposition == "view" else " in its folder"
+        self.notify(f"{verb} {attachment.name}{where}")
+        self.log(f"attachment: {' '.join(command)}")
 
     def action_mark_all_read(self) -> None:
         channel = self.current_channel()

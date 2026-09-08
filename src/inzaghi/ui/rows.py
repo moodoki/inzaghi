@@ -15,7 +15,7 @@ from datetime import datetime
 from rich.markup import escape
 
 from .. import fmt
-from ..model import Doc, Event, Snapshot, Thread
+from ..model import Attachment, Doc, Event, Snapshot, Thread
 
 #: Marker and colour per event kind.  Anything unrecognised stays neutral.
 KIND_STYLE: dict[str, tuple[str, str]] = {
@@ -38,6 +38,14 @@ HEALTH_STYLE = {
 
 _KIND_PREFIX_RE = re.compile(r"^\[[^\]]{1,24}\]\s*")
 
+#: Marker per attachment state.  A refusal is the session's mistake and has to
+#: be visible as one; a file still crossing the sync is nobody's.
+ARRIVAL_STYLE: dict[str, tuple[str, str]] = {
+    "here": ("⧉", ""),
+    "syncing": ("⟳", "dim"),
+    "refused": ("⚠", "yellow"),
+}
+
 #: Width of the timestamp column: enough for "Sep 04 22:10".
 STAMP_WIDTH = 12
 
@@ -59,6 +67,8 @@ class Row:
     readable: bool = False
     #: Lowercased haystack for search: the title and the whole document.
     text: str = ""
+    #: Files this entry delivered, in the order it named them.
+    attachments: tuple[Attachment, ...] = ()
 
 
 def stamp(ts: datetime | None, now: datetime) -> str:
@@ -74,11 +84,15 @@ def clean_title(text: str) -> str:
 def build_rows(snapshot: Snapshot, unread: set[str], now: datetime | None = None) -> list[Row]:
     """Pinned panels first, then everything else newest-first."""
     now = now or snapshot.scanned_at
-    rows = [_pinned_row(name, doc, now) for name, doc in _pinned_docs(snapshot)]
+    delivered = snapshot.attachments
+    rows = [
+        _pinned_row(name, doc, delivered.get(doc.path, ()), now)
+        for name, doc in _pinned_docs(snapshot)
+    ]
 
     entries: list[tuple[datetime, Row]] = []
     for event in snapshot.events:
-        entries.append((event.ts, _event_row(event, unread, now)))
+        entries.append((event.ts, _event_row(event, delivered.get(event.path, ()), unread, now)))
     for thread in snapshot.threads:
         entries.append((thread.sent.ts, _thread_row(thread, now)))
     entries.sort(key=lambda pair: pair[0], reverse=True)
@@ -98,7 +112,9 @@ def _pinned_docs(snapshot: Snapshot) -> list[tuple[str, Doc]]:
     return ordered + rest
 
 
-def _pinned_row(name: str, doc: Doc, now: datetime) -> Row:
+def _pinned_row(
+    name: str, doc: Doc, attachments: tuple[Attachment, ...], now: datetime
+) -> Row:
     updated = datetime.fromtimestamp(doc.mtime).astimezone()
     title = name.removesuffix(".md").replace("_", " ").lower()
     return Row(
@@ -108,11 +124,17 @@ def _pinned_row(name: str, doc: Doc, now: datetime) -> Row:
         text=f"{title}\n{doc.body}".lower(),
         pinned=True,
         ts=updated,
-        label=f"{'':>{STAMP_WIDTH - 2}}[b]▣ {escape(title):<14}[/] [dim]{fmt.ago(updated, now)}[/]",
+        attachments=attachments,
+        label=(
+            f"{'':>{STAMP_WIDTH - 2}}[b]▣ {escape(title):<14}[/]"
+            f" [dim]{fmt.ago(updated, now)}[/]{clip_marker(attachments)}"
+        ),
     )
 
 
-def _event_row(event: Event, unread: set[str], now: datetime) -> Row:
+def _event_row(
+    event: Event, attachments: tuple[Attachment, ...], unread: set[str], now: datetime
+) -> Row:
     mark, colour = KIND_STYLE.get(event.kind, ("·", "white"))
     is_unread = str(event.path) in unread
     title = escape(clean_title(event.title))[:200]
@@ -126,9 +148,11 @@ def _event_row(event: Event, unread: set[str], now: datetime) -> Row:
         unread=is_unread,
         readable=True,
         text=f"{event.title}\n{event.doc.body}".lower(),
+        attachments=attachments,
         label=(
             f"[dim]{stamp(event.ts, now)}[/] [{colour}]{mark}[/] "
             f"[{colour}]{escape(event.kind):<13}[/] {open_tag}{title}{close_tag}"
+            f"{clip_marker(attachments)}"
         ),
     )
 
@@ -157,6 +181,37 @@ def _thread_row(thread: Thread, now: datetime) -> Row:
             f"[{colour}]{'you':<13}[/] {title} [dim]· {note}[/]"
         ),
     )
+
+
+def clip_marker(attachments: tuple[Attachment, ...]) -> str:
+    """The ``⧉2`` on a timeline row that delivered files, or nothing.
+
+    Counts what was announced rather than what has landed: the point of the
+    marker is that this entry came with files, which is true before they
+    arrive and stays true if one of them was refused.
+    """
+    if not attachments:
+        return ""
+    return f" [dim]⧉{len(attachments)}[/]"
+
+
+def attachment_label(attachment: Attachment) -> str:
+    """One line in the attachment strip: what it is, then how big or how late."""
+    mark, colour = ARRIVAL_STYLE[attachment.arrival]
+    head = f"[{colour}]{mark}[/] " if colour else f"{mark} "
+    name = escape(attachment.name)
+    if attachment.arrival == "here":
+        detail = fmt.size(attachment.size)
+        if attachment.disposition == "reveal":
+            detail += " · in folder"
+    elif attachment.arrival == "refused":
+        detail = escape(attachment.problem)
+    else:
+        detail = "waiting on sync"
+    line = f"{head}{name} [dim]{detail}[/]"
+    if attachment.note:
+        line += f" [dim]· {escape(attachment.note)}[/]"
+    return line
 
 
 def health_badge(snapshot: Snapshot, now: datetime) -> str:

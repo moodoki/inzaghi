@@ -118,11 +118,34 @@ Composer {
     background: $primary-darken-2;
 }
 
+#reader-column {
+    width: 1fr;
+    height: 1fr;
+}
+
 #reader {
     width: 1fr;
     height: 1fr;
     padding: 0 2;
     scrollbar-size-vertical: 1;
+}
+
+/* Delivered files, listed under the document that announced them. Sized to
+   its contents so prose keeps the room when there are none -- and it is
+   hidden outright in that case. */
+#attachments {
+    height: auto;
+    max-height: 40%;
+    border: none;
+    border-top: solid $panel;
+    padding: 0 1;
+    background: $surface;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#attachments > .option-list--option-highlighted {
+    background: $primary-darken-2;
 }
 
 /* -- modals ------------------------------------------------------------ */
