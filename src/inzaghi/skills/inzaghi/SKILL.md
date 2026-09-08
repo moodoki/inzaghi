@@ -62,7 +62,9 @@ should live if it is not already obvious or specified.
 5. **Rewrite `notifications/HEARTBEAT.md`** with a fresh
    `next update expected by`.
 6. **Delete any `… (conflicted copy …)` files.** They are your own files,
-   duplicated by the sync client.
+   duplicated by a sync client that could not merge an overwrite. A channel
+   kept in step by rsync over ssh never has any — finding none is the normal
+   result, not a sign that something is wrong.
 
 Between wakeups, write an event file the moment something happens that the
 watcher would want to know about — do not save it up for the next wakeup.

@@ -213,6 +213,9 @@ keeps the draft to retry.
 
 A sync client that cannot merge an overwritten file leaves a duplicate beside
 it — `STATUS (conflicted copy 2026-09-05).md`. These are never shown as events.
+They are specific to that kind of transport: a channel moved by rsync over ssh
+has none, because rsync overwrites rather than duplicating, and the strip and
+the `K` key simply stay quiet.
 When a channel has some, the strip says so and `K` offers to delete them, after
 a confirmation listing exactly what will go. The key is hidden otherwise, and on
 a `read_only` channel: read-only means untouched, not merely unwritten-to.
