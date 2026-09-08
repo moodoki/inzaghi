@@ -136,6 +136,81 @@ An unmounted volume looks exactly like a deletion, and a folder that still
 exists but has lost its `notifications/` is read as mid-sync rather than
 removed.
 
+## Moving a channel yourself
+
+A channel is a folder with a contract, and nothing in the contract says how
+the folder gets from one machine to the other. A sync client is the
+convenient answer and remains the default one — it is store-and-forward, so
+neither end has to be awake when the other writes. `inz sync` is the
+alternative for when you would rather not put the channel through a third
+party, or there is no sync client on the box:
+
+```toml
+[[channels]]
+path = "~/channels/northwind"          # the mirror on this machine
+name = "northwind"
+remote = "worker:/srv/channels/northwind"
+sync_marker = "~/.local/state/inzaghi/northwind.synced"
+```
+
+```sh
+inz sync                # every channel with a remote
+inz sync northwind      # or one
+inz sync --dry-run      # print the rsync commands, quoted and runnable
+```
+
+The first run creates the mirror, so the folder does not have to exist yet.
+From cron, on the machine you watch from:
+
+```
+*/2 * * * * /path/to/inz sync >>~/.cache/inz-sync.log 2>&1
+```
+
+### Which end drives
+
+This drives from **the watching end**, pulling and pushing over ssh, which is
+the topology worth having when the session box is always on and the laptop is
+not. It needs no reverse channel, the intermittent end initiates so nothing
+ever dials a sleeping host, and the ssh key points from your laptop into the
+dev box rather than handing an unattended agent a foothold on your laptop.
+Confinement therefore belongs on the session box, in `authorized_keys`:
+
+```
+restrict,command="rrsync /srv/channels/northwind" ssh-ed25519 AAAA…
+```
+
+The cost is send latency: `ctrl+s` writes into the mirror, and the message
+leaves on the next cycle rather than at once.
+
+### The cycle, and why it is in that order
+
+    1. pull  notifications/   the session's, ours to overwrite wholesale
+    2. pull  inbox/done/       its receipts for what it has picked up
+    3. retire the local copy of every message that has turned up in done/
+    4. push  inbox/            what is left: messages not yet picked up
+
+The two ends never write the same thing — `notifications/` and `inbox/done/`
+are the session's, `inbox/` is written here and consumed there — so this is
+three one-way copies rather than a merge, with no conflict rules to get wrong.
+Step 3 is the one that decides something, and its position is load-bearing:
+push before retiring and you upload a message the session has already acted
+on, and it acts on it again.
+
+Neither inbox leg carries `--delete`, in either direction. Downward it would
+resurrect what the session just consumed; upward it would delete an
+instruction written thirty seconds ago and not yet read. Retirement is by
+exact filename instead — `X.md` goes only when `done/` holds a file called
+`X.md` with one pickup stamp in front of it — and every path is re-checked at
+the moment of unlinking, the same discipline the conflict cleanup follows.
+
+`-a` on every leg, because a message's send time *is* its mtime. No
+`--partial`, because rsync's default is to write a dot-prefixed temporary and
+rename on completion, which is exactly why a half-transferred file is
+invisible to the scanner and an attachment reads as *waiting on sync* until
+all of it is here. Cycles lock against each other with `fcntl` — a 600 MB
+attachment outlasts a two-minute cron — and a channel marked `read_only`
+refuses to sync at all, since pulling writes into the folder.
+
 ## When the link is the problem, not the session
 
 A silent folder means a dead session only if the folder is still arriving. On
@@ -289,5 +364,6 @@ regenerates). Supporting another harness is one entry in `skill.HARNESSES`.
 
 Working: overview, per-channel tabs, timeline, reader, composer, quick actions,
 search and kind filtering, live discovery, and the `inzaghi ls | init | send |
-status` commands, the since-last-read divider, sync-conflict cleanup, delivered
-files, and the session-side skill.
+status | sync` commands, the since-last-read divider, sync-conflict cleanup,
+delivered files, ssh transport with a link-health marker, and the session-side
+skill.

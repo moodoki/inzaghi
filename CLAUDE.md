@@ -29,6 +29,7 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/channel.py   folder -> Snapshot, with a content cache
     src/inzaghi/attach.py    files a notification delivers: what one is,
                              reading a text one, launching the rest
+    src/inzaghi/transport.py rsync-over-ssh cycle for a folder no client syncs
     src/inzaghi/config.py    TOML config, root scanning, discovery
     src/inzaghi/state.py     local read receipts (never written into a channel)
     src/inzaghi/compose.py   atomic writes into inbox/
@@ -57,8 +58,14 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   deciding an absence, sending, deleting conflicts. That volume belongs to a
   sync client and answers when it likes; a call that waits on it stops the app
   redrawing. `tests/test_ui.py` asserts the thread, not the timing.
-- `channel.remove_conflicts` is the only code that deletes anything; it
-  re-validates each path rather than trusting the snapshot it was given.
+- Two places delete: `channel.remove_conflicts` and `transport.retire`. Both
+  re-validate every path at the moment of unlinking rather than trusting the
+  listing they started from, and neither takes its decision from a fuzzy key --
+  retirement matches a filename outright, where threading is allowed to be
+  approximate. Add a third only with the same care.
+- The sync cycle pulls `done/` *before* it pushes `inbox/`, and retires in
+  between. Reordered, the push uploads a message the session already acted on
+  and it gets acted on twice. Neither inbox leg may ever carry `--delete`.
 - Read receipts are forgotten a whole channel at a time, and only on evidence
   from outside the channel: the config no longer watching it, or an absence
   `absence_is_real` will vouch for. Never per file -- a notification missing

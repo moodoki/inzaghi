@@ -82,6 +82,8 @@ class Channel:
     sync_marker: Path | None = None
     #: The cadence that marker is expected to keep.
     sync_interval: timedelta | None = None
+    #: ``user@host:/path`` this folder is mirrored from, for ``inz sync``.
+    remote: str = ""
     _cache: dict[Path, tuple[float, int, Doc]] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:

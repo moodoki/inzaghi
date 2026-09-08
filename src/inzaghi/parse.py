@@ -90,6 +90,19 @@ def normalise_ref(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
+def strip_stamp(name: str) -> str:
+    """``2026-09-05_1200_X.md`` -> ``X.md``; anything else unchanged.
+
+    Exactly one stamp, unlike :func:`normalise_ref`, which takes them all off
+    to build a comparison key. Here the answer is a filename that has to match
+    another filename outright: the session prefixes the pickup time onto a
+    message when it moves it to ``done/``, so removing that one prefix gives
+    back the name the message had in ``inbox/`` and nothing else.
+    """
+    stamped = _STAMPED_RE.match(name)
+    return stamped.group("rest") if stamped else name
+
+
 @dataclass(frozen=True, slots=True)
 class FileName:
     """What a notification's filename alone tells us."""

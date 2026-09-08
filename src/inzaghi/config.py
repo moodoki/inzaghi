@@ -78,6 +78,9 @@ class ChannelSpec:
     sync_marker: Path | None = None
     #: The cadence that marker is expected to keep.
     sync_interval_seconds: float = DEFAULT_SYNC_INTERVAL
+    #: ``user@host:/path/to/channel`` for ``inz sync``. Empty when the folder
+    #: is kept in step by something else, which is most of the time.
+    remote: str = ""
 
 
 @dataclass(slots=True)
@@ -125,6 +128,7 @@ class Config:
                     sync_interval_seconds=float(
                         entry.get("sync_interval_seconds", DEFAULT_SYNC_INTERVAL)
                     ),
+                    remote=str(entry.get("remote", "")),
                 )
                 for entry in raw.get("channels", [])
                 if entry.get("path")
@@ -195,8 +199,32 @@ class Config:
                     grace=grace,
                     sync_marker=spec.sync_marker,
                     sync_interval=timedelta(seconds=spec.sync_interval_seconds),
+                    remote=spec.remote,
                 )
         return sorted(found.values(), key=lambda c: c.name.lower())
+
+
+    def syncable(self) -> list[Channel]:
+        """Channels this config gives a remote to, existing or not.
+
+        Deliberately not filtered through ``is_channel`` the way ``discover``
+        is: the first sync is what creates the mirror, and a folder that is
+        not there yet still has a remote to pull it from.
+        """
+        grace = timedelta(seconds=self.heartbeat_grace_seconds)
+        return [
+            Channel(
+                root=spec.path.expanduser(),
+                name=spec.name,
+                read_only=spec.read_only,
+                grace=grace,
+                sync_marker=spec.sync_marker,
+                sync_interval=timedelta(seconds=spec.sync_interval_seconds),
+                remote=spec.remote,
+            )
+            for spec in self.channels
+            if spec.remote
+        ]
 
 
 def scan_root(root: Path, depth: int = DEFAULT_SCAN_DEPTH) -> list[Path]:
