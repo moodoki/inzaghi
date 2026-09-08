@@ -184,13 +184,21 @@ def _row(channel: Channel, snapshot: Snapshot, unread: set[str], now: datetime) 
     state = snapshot.waiting or (heartbeat.state if heartbeat else None) or (
         snapshot.status.headline if snapshot.status else ""
     )
+    if health == "offline" and not snapshot.waiting:
+        # Whatever the session last said is older than this row makes it look,
+        # so the link is the more useful thing to put in front of someone.
+        age = snapshot.transport.age(now) if snapshot.transport else None
+        state = f"no sync for {fmt.duration(age)}" if age else "never synced"
     return (
         Text(mark, colour),
         name,
         Text(fmt.ago(heartbeat.updated if heartbeat else None, now), "dim"),
         next_update,
         flags,
-        Text(_one_line(state), "red" if snapshot.waiting else ""),
+        Text(
+            _one_line(state),
+            "red" if snapshot.waiting else "yellow" if health == "offline" else "",
+        ),
     )
 
 

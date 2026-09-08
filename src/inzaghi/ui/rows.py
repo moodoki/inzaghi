@@ -34,6 +34,9 @@ HEALTH_STYLE = {
     "late": ("◍", "yellow"),
     "stale": ("○", "bold red"),
     "unknown": ("·", "dim"),
+    # Not a verdict on the session: the arrow says we have stopped hearing
+    # from the link, so nothing in the channel is current enough to judge.
+    "offline": ("⇅", "bold yellow"),
 }
 
 _KIND_PREFIX_RE = re.compile(r"^\[[^\]]{1,24}\]\s*")

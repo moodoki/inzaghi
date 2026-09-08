@@ -351,6 +351,15 @@ class InzaghiApp(App):
         # visible in the overview without a popup demanding attention.
         if was == "fresh" and health in {"late", "stale"} and self.config.alerts.heartbeat_late:
             self._shout(f"{snapshot.name}: no heartbeat since its deadline", severity="warning")
+        # A different sentence on purpose. "No heartbeat" would name the wrong
+        # culprit and send someone to look at a session that may be fine.
+        if was == "fresh" and health == "offline" and self.config.alerts.sync_late:
+            age = snapshot.transport.age(now) if snapshot.transport else None
+            since = f"for {fmt.duration(age)}" if age else "at all"
+            self._shout(
+                f"{snapshot.name}: nothing has synced {since} — the channel is not current",
+                severity="warning",
+            )
         self._known_health[key] = health
 
     def _shout(self, message: str, severity: str = "information") -> None:

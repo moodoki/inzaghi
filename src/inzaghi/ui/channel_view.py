@@ -301,6 +301,7 @@ class ChannelPane(Vertical):
                 parts.append(f"[dim]{_escape(heartbeat.state)}[/]")
         else:
             parts.append("[dim]no heartbeat file[/]")
+        parts.extend(_link_note(snapshot, now))
         if self.channel.read_only:
             parts.append("[dim italic]read-only[/]")
 
@@ -857,6 +858,27 @@ class ChannelPane(Vertical):
     def on_composer_closed(self, event: Composer.Closed) -> None:
         event.stop()
         self.focus_timeline()
+
+
+def _link_note(snapshot: Snapshot, now: datetime) -> list[str]:
+    """What the transport marker is worth saying, if there is one.
+
+    Silent when the link is keeping its cadence -- that is the ordinary case
+    and the strip has better things to show. It speaks up when the sync is
+    overdue, because then every other figure on this line is older than it
+    looks.
+    """
+    transport = snapshot.transport
+    if transport is None:
+        return []
+    health = snapshot.link_health(now)
+    if health == "unknown":
+        return ["[dim]never synced[/]"] if transport.synced_at is None else []
+    if health == "fresh":
+        return [f"[dim]⇅ {fmt.ago(transport.synced_at, now)}[/]"]
+    age = transport.age(now)
+    colour = "bold red" if health == "stale" else "yellow"
+    return [f"[{colour}]⇅ no sync for {fmt.duration(age)}[/]" if age else f"[{colour}]⇅ no sync[/]"]
 
 
 def _escape(text: str) -> str:

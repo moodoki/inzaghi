@@ -136,6 +136,46 @@ An unmounted volume looks exactly like a deletion, and a folder that still
 exists but has lost its `notifications/` is read as mid-sync rather than
 removed.
 
+## When the link is the problem, not the session
+
+A silent folder means a dead session only if the folder is still arriving. On
+a sync client that is usually safe to assume; on rsync over ssh it is not — an
+unreachable host, or a laptop that slept through the last ten cron ticks,
+looks exactly like a session that died, because in both cases nothing new
+turns up.
+
+Point a channel at a marker file and Inzaghi can tell them apart:
+
+```toml
+[[channels]]
+path = "~/channels/northwind"
+sync_marker = "~/.local/state/inzaghi/northwind.synced"
+sync_interval_seconds = 300
+```
+
+Whatever moves the folder touches that file on success — `inz sync` does, and
+so can a script of your own. Its mtime is the last time this end heard
+anything at all, which is the one fact the channel cannot report about itself.
+The path is not special: put it outside the channel when this end pulls, or
+inside the channel when the far end pushes it along with everything else.
+
+The marker is judged against `sync_interval_seconds` the same way a heartbeat
+is judged against its own promise, with the same grace. What it buys:
+
+- A **late heartbeat over a healthy link** still reads as `late` or `stale`.
+  The folder is arriving, so the silence is the session's, and the alert says
+  so.
+- A **late heartbeat with an overdue link** reads as `⇅ offline` instead. The
+  staleness is unexplained rather than damning, the strip says `no sync for
+  22m`, and the alert names the sync rather than sending you to look at a
+  session that may be fine.
+- A **fresh heartbeat with an overdue link** is left alone. It was true when
+  it was written, and a link that broke a minute ago has not made it false.
+
+Watching nothing changes nothing: without `sync_marker` every verdict is
+exactly what it was, and a marker that has never been touched — a sync not
+wired up yet — is treated as no promise rather than a broken one.
+
 ## Finding things in a long log
 
 `/` asks one of two questions, depending on where the keyboard is: *which

@@ -23,6 +23,10 @@ DEFAULT_DISCOVER_SECONDS = 30.0
 DEFAULT_SCAN_DEPTH = 2
 #: Seconds of slack past a promised heartbeat before calling it late.
 DEFAULT_HEARTBEAT_GRACE = 60.0
+#: How often a channel's transport is expected to run, when one is being
+#: watched.  Generous on purpose: a marker is there to catch an outage, and a
+#: cadence guessed too tight would report one every time a laptop slept.
+DEFAULT_SYNC_INTERVAL = 300.0
 
 
 def config_path() -> Path:
@@ -46,6 +50,10 @@ class Alerts:
     hard_stop: bool = True
     error: bool = True
     heartbeat_late: bool = False
+    #: On by default, unlike heartbeat_late: a session drifting past its
+    #: deadline is usually a slow job, but a transport that has stopped means
+    #: everything on screen is stale and nothing will say so on its own.
+    sync_late: bool = True
     waiting: bool = True
     bell: bool = True
     banner: bool = False  # macOS notification centre
@@ -63,6 +71,13 @@ class ChannelSpec:
     path: Path
     name: str = ""
     read_only: bool = False
+    #: A file whatever moves this folder touches on success. Its mtime is the
+    #: last time this end heard anything, which is the only way to tell a
+    #: broken link from a dead session. Explicit channels only: a marker
+    #: belongs to one channel's transport, and a root stands for many.
+    sync_marker: Path | None = None
+    #: The cadence that marker is expected to keep.
+    sync_interval_seconds: float = DEFAULT_SYNC_INTERVAL
 
 
 @dataclass(slots=True)
@@ -102,6 +117,14 @@ class Config:
                     path=Path(str(entry["path"])).expanduser(),
                     name=str(entry.get("name", "")),
                     read_only=bool(entry.get("read_only", False)),
+                    sync_marker=(
+                        Path(str(entry["sync_marker"])).expanduser()
+                        if entry.get("sync_marker")
+                        else None
+                    ),
+                    sync_interval_seconds=float(
+                        entry.get("sync_interval_seconds", DEFAULT_SYNC_INTERVAL)
+                    ),
                 )
                 for entry in raw.get("channels", [])
                 if entry.get("path")
@@ -166,7 +189,12 @@ class Config:
             path = spec.path.expanduser()
             if is_channel(path):
                 found[path] = Channel(
-                    root=path, name=spec.name, read_only=spec.read_only, grace=grace
+                    root=path,
+                    name=spec.name,
+                    read_only=spec.read_only,
+                    grace=grace,
+                    sync_marker=spec.sync_marker,
+                    sync_interval=timedelta(seconds=spec.sync_interval_seconds),
                 )
         return sorted(found.values(), key=lambda c: c.name.lower())
 
