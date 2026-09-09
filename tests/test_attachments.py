@@ -8,6 +8,7 @@ the prose announcing it cross separately, in either order.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -19,7 +20,7 @@ from textual.widgets import Markdown, OptionList, Static, TabbedContent
 from conftest import NOW, write
 
 from inzaghi import attach
-from inzaghi.channel import Channel
+from inzaghi.channel import CACHE_SECONDS, Channel
 from inzaghi.model import Attachment, Disposition, Doc
 from inzaghi.ui.channel_view import ChannelPane
 from inzaghi.ui.preview import MIN_PERCENT, START_PERCENT, STEP_PERCENT, Grip
@@ -739,6 +740,60 @@ async def test_a_rewritten_file_is_re_read_without_taking_the_keyboard(read_here
         assert "verified twice" in rendered(app)
         assert scrolls == [], "the file was scrolled home for a re-read"
         assert app.screen.query_one("#timeline", OptionList).has_focus
+
+
+async def test_a_rewrite_the_modification_time_missed_is_still_re_read(read_here):
+    """Same length, same mtime: only ctime and the inode give the file away.
+
+    Which is the shape a sync client hands us. It reports the modification
+    date the far side wrote, at whatever resolution it keeps, and a rewritten
+    payload is often exactly as long as the one it replaced.
+    """
+    app = make_app(read_here)
+    payload = read_here / "notifications" / "attachments" / "shard-3-notes.md"
+    async with app.run_test() as pilot:
+        await open_file(app, pilot)
+        was = payload.stat()
+
+        deliver(read_here, "shard-3-notes.md", b"# Shard 3\n\nChecksums verifyed.\n")
+        os.utime(payload, (was.st_atime, was.st_mtime))
+        assert payload.stat().st_size == was.st_size
+        assert payload.stat().st_mtime == was.st_mtime
+
+        app.rescan()
+        await settle(app, pilot)
+        assert "verifyed" in rendered(app)
+
+
+async def test_an_open_file_is_not_believed_for_ever(read_here):
+    """A stat that has stopped moving at all stops being an answer.
+
+    The last defence, and the only one left when a File Provider is reporting
+    a placeholder it has not refreshed: past a minute the file is read again
+    whatever the scan thinks it knows.
+    """
+    app = make_app(read_here)
+    payload = read_here / "notifications" / "attachments" / "shard-3-notes.md"
+    real_stat = Path.stat
+
+    async with app.run_test() as pilot:
+        pane = await open_file(app, pilot)
+        frozen = payload.stat()
+
+        def lying(self, **kwargs):
+            return frozen if self == payload else real_stat(self, **kwargs)
+
+        deliver(read_here, "shard-3-notes.md", b"# Shard 3\n\nChecksums verified twice.\n")
+        with mock.patch.object(Path, "stat", lying):
+            app.rescan()
+            await settle(app, pilot)
+            assert "verified twice" not in rendered(app), "the stat told the truth"
+
+            # Long enough that what is on screen has stopped counting as read.
+            pane.preview.read_at -= CACHE_SECONDS + 1
+            app.rescan()
+            await settle(app, pilot)
+            assert "verified twice" in rendered(app)
 
 
 async def test_a_file_changing_leaves_the_cursor_on_the_one_it_was_on(read_here):

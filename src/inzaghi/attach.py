@@ -200,6 +200,7 @@ def _resolve_one(folder: Path, name: str, note: str) -> Attachment:
         disposition=disposition,
         size=info.st_size,
         mtime=info.st_mtime,
+        fingerprint=(info.st_ctime, info.st_ino),
     )
 
 

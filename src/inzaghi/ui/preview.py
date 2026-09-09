@@ -19,6 +19,7 @@ answers when it likes.
 from __future__ import annotations
 
 from pathlib import Path
+from time import monotonic
 
 from rich.markup import escape
 from textual import events
@@ -104,6 +105,10 @@ class Preview(Vertical):
         #: text.  A re-read of the same file leaves the scroll position where
         #: it was; a different file starts at the top.
         self.showing: tuple | None = None
+        #: When the text on screen was read off the volume.  A file is only
+        #: believed for so long: the facts the scan compares come from a stat,
+        #: and a sync client's stat is allowed to stop moving.
+        self.read_at: float | None = None
         #: The text of it, kept rather than dropped after rendering: a search
         #: in this pane matches against the source it was given, the same way
         #: a search in the reader matches the document it rendered.
@@ -145,7 +150,22 @@ class Preview(Vertical):
         """
         if self.showing is None:
             return False
-        return self.showing[:3] == (attachment.name, attachment.size, attachment.mtime)
+        return self.showing[:4] == (
+            attachment.name,
+            attachment.size,
+            attachment.mtime,
+            attachment.fingerprint,
+        )
+
+    def is_stale(self, older_than: float) -> bool:
+        """Whether what is on screen has been believed for long enough.
+
+        The last defence, for a stat that has stopped answering truthfully
+        altogether rather than merely late: past this, the file is read again
+        whatever the scan thinks it knows about it. A re-read that finds the
+        same text costs a comparison and changes nothing on screen.
+        """
+        return self.read_at is not None and monotonic() - self.read_at >= older_than
 
     def show(self, attachment: Attachment, text: str, truncated: bool, *, focus: bool) -> None:
         """Put a text delivery on screen.
@@ -156,10 +176,21 @@ class Preview(Vertical):
         """
         if not composed(self, "#preview-body"):
             return  # the tab is coming down; the text has nowhere to go
-        stamp = (attachment.name, attachment.size, attachment.mtime, truncated)
+        stamp = (
+            attachment.name,
+            attachment.size,
+            attachment.mtime,
+            attachment.fingerprint,
+            truncated,
+        )
+        self.read_at = monotonic()
         body = self.query_one("#preview-body", VerticalScroll)
         self.query_one("#preview-grip", Grip).update(_heading(attachment, truncated))
-        if stamp != self.showing:
+        # The text as well as the stamp, because the stamp is made of what a
+        # stat said and the text is the file. When the two disagree the file
+        # wins: a re-read that had to be asked for by the clock rather than by
+        # the scan is precisely the one whose stamp did not move.
+        if stamp != self.showing or text != self.text:
             fresh = self.showing_name != attachment.name
             self.showing = stamp
             self._write(attachment, text)
@@ -207,6 +238,7 @@ class Preview(Vertical):
         held = self.query_one("#preview-body", VerticalScroll).has_focus
         self.display = False
         self.showing = None
+        self.read_at = None
         self.text = ""
         self.query_one("#preview-md", Markdown).update("")
         self.query_one("#preview-text", Static).update("")

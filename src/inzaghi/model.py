@@ -81,6 +81,13 @@ class Attachment:
     #: everything else here is noticed by: the tuple simply stops comparing
     #: equal, the same way a size filling in does.
     mtime: float | None = None
+    #: ``(ctime, inode)``: the part of a file's identity that its size and its
+    #: modification time miss.  A sync client swapping new contents in touches
+    #: both of these even where the modification date it reports does not move,
+    #: and a rewritten payload is often exactly as long as the one before it.
+    #: Compared, never shown -- the same reason ``channel._doc`` fingerprints
+    #: what it caches.
+    fingerprint: tuple[float, int] | None = None
     #: Why it was refused, in the words shown to the person reading.
     problem: str = ""
 

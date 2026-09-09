@@ -57,6 +57,31 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   deciding an absence, sending, deleting conflicts. That volume belongs to a
   sync client and answers when it likes; a call that waits on it stops the app
   redrawing. `tests/test_ui.py` asserts the thread, not the timing.
+- The scan and the discovery sweep get a pool of their own (`VOLUME_THREADS`),
+  and only one of each is ever in flight. A read that has blocked inside a
+  sync client cannot be cancelled, only waited for: cancelling the worker
+  leaves the thread where it was. So a poll every two seconds at a volume that
+  has gone quiet does not queue scans, it accumulates threads -- and on
+  Textual's shared pool that ends with sending, deleting and opening dead too,
+  until the app is restarted. A request that arrives while a scan is out is
+  remembered, not dropped; the rescan after a send has to see the send.
+- A file that is overwritten in place is never trusted to a `stat`. On a File
+  Provider mount -- iCloud, Dropbox, Nextcloud on macOS -- `stat` describes the
+  placeholder, not the file: the contents are on a server until something opens
+  them, and a provider nobody has asked keeps answering about the ones it last
+  wrote down. A cache that believes it stops opening the file, and a file
+  nobody opens is never fetched, so the heartbeat freezes until the process
+  restarts. `channel._doc` therefore reads every singleton on every scan,
+  fingerprints the rest by ctime and inode as well as mtime and size (a
+  heartbeat rewritten with a new timestamp is the same length as the last one),
+  and trusts nothing for longer than `CACHE_SECONDS`.
+- The same holds for the delivered file open in `ui/preview.py`, which is
+  compared by what a stat said about it: `Attachment.fingerprint` carries the
+  ctime and inode, `_follow_preview` runs on every poll rather than only when
+  the strip was rebuilt, and anything on screen for longer than
+  `CACHE_SECONDS` is read again regardless. When the text that comes back
+  disagrees with the stamp describing it, the text wins -- a re-read the clock
+  had to ask for is precisely the one whose stat never moved.
 - `channel.remove_conflicts` is the only code that deletes anything; it
   re-validates each path rather than trusting the snapshot it was given.
 - Read receipts are forgotten a whole channel at a time, and only on evidence

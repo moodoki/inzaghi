@@ -1,10 +1,16 @@
+import os
 from datetime import datetime, timedelta
+from pathlib import Path
+from time import monotonic
+from unittest import mock
 
 import pytest
 
 from conftest import NOW, TZ, write
+from inzaghi import channel as channel_module
 from inzaghi.channel import Channel, is_channel
 from inzaghi.config import scan_root
+from inzaghi.model import Doc
 
 
 def test_scan_separates_singletons_from_the_log(channel):
@@ -223,3 +229,98 @@ def test_discovery_finds_channels_under_a_root(channel_root, tmp_path):
     (tmp_path / "not_a_channel").mkdir()
     assert is_channel(channel_root)
     assert scan_root(tmp_path) == [channel_root]
+
+
+# -- what a synced folder does to a cache ----------------------------------
+#
+# A channel is read across a File Provider mount -- iCloud, Dropbox, Nextcloud
+# on macOS -- where ``stat`` describes the placeholder standing in for a file
+# rather than the file. The contents sit on a server until something opens
+# them, and a provider nobody has asked keeps answering about the ones it last
+# wrote down. A cache that believes that stat stops opening the file, and a
+# file nobody opens is one the provider is never asked to fetch: the answer
+# stays wrong until the process restarts.
+
+
+def test_a_file_overwritten_in_place_is_read_on_every_scan(channel):
+    """The singletons are the only files a stale stat could hide."""
+    loaded: list[str] = []
+    real_load = Doc.load
+
+    def watched(path):
+        loaded.append(path.name)
+        return real_load(path)
+
+    with mock.patch.object(Doc, "load", watched):
+        channel.scan(now=NOW)
+        loaded.clear()
+        channel.scan(now=NOW)  # nothing has changed, and it is read anyway
+
+    assert {"HEARTBEAT.md", "STATUS.md", "TASK_OVERVIEW.md"} <= set(loaded)
+    # The log is append-only: a new entry is a new path, and a new path is
+    # always read, so those may be trusted to the stat.
+    assert [name for name in loaded if name.startswith("2026-")] == []
+
+
+def test_a_frozen_stat_does_not_freeze_the_heartbeat(channel, channel_root):
+    """The provider's answer stops moving; the file behind it does not."""
+    beat = channel_root / "notifications" / "HEARTBEAT.md"
+    before = channel.scan(now=NOW)
+    frozen = beat.stat()
+
+    write(
+        beat,
+        """
+# northwind session heartbeat
+
+- **updated:** 2026-09-05T05:59:00+08:00
+- **next update expected by:** 2026-09-05T06:29:00+08:00 (+30 min)
+- **state:** shard 4 of 8 reindexing on worker-2
+""",
+    )
+    with mock.patch.object(Path, "stat", lambda self, **kw: frozen):
+        after = channel.scan(now=NOW)
+
+    assert before.heartbeat.state.startswith("shard 3")
+    assert after.heartbeat.state.startswith("shard 4")
+
+
+def test_a_rewrite_the_modification_time_missed_is_still_noticed(channel, channel_root):
+    """A log entry, rewritten to the same length under its original mtime."""
+    entry = channel_root / "notifications" / "2026-09-04_2325_milestone_shard-2-reindexed.md"
+    was = entry.stat()
+    channel.scan(now=NOW)
+
+    body = entry.read_text(encoding="utf-8").replace("Checksums", "Cheqsumzz")
+    entry.write_text(body, encoding="utf-8")
+    os.utime(entry, (was.st_atime, was.st_mtime))
+    assert entry.stat().st_size == was.st_size and entry.stat().st_mtime == was.st_mtime
+
+    (milestone,) = [e for e in channel.scan(now=NOW).events if e.kind == "milestone"]
+    assert "Cheqsumzz" in milestone.doc.body
+
+
+def test_no_parse_is_trusted_for_ever(channel, channel_root, monkeypatch):
+    """Even a stat that never moves again costs one stale minute, not the day."""
+    entry = channel_root / "notifications" / "2026-09-04_2325_milestone_shard-2-reindexed.md"
+    channel.scan(now=NOW)
+    frozen = entry.stat()
+
+    body = entry.read_text(encoding="utf-8").replace("Checksums", "Cheqsumzz")
+    entry.write_text(body, encoding="utf-8")
+
+    with mock.patch.object(Path, "stat", lambda self, **kw: frozen):
+        (stale,) = [e for e in channel.scan(now=NOW).events if e.kind == "milestone"]
+        assert "Checksums" in stale.doc.body  # inside the minute, still believed
+
+        later = monotonic() + channel_module.CACHE_SECONDS + 1
+        monkeypatch.setattr(channel_module, "monotonic", lambda: later)
+        (fresh,) = [e for e in channel.scan(now=NOW).events if e.kind == "milestone"]
+
+    assert "Cheqsumzz" in fresh.doc.body
+
+
+def test_an_unchanged_file_keeps_the_document_it_had(channel):
+    """Re-reading is about not trusting the stat, not about churning objects."""
+    was = channel.scan(now=NOW).pinned["HEARTBEAT.md"]
+    assert channel.scan(now=NOW).pinned["HEARTBEAT.md"] is was
