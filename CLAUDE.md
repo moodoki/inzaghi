@@ -36,8 +36,9 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/skills/      the session-side skill, shipped as package data
     src/inzaghi/ui/          Textual app (composer.py is the inline draft box,
                              preview.py the reader's bottom pane for a
-                             delivered text file, mounting.py guards the
-                             timed refreshes)
+                             delivered text file, vim.py what a motion means
+                             to the focused pane, find.py the in-document
+                             search, mounting.py guards the timed refreshes)
 
 Installed as two console scripts, `inzaghi` and the `inz` alias, both pointing
 at `cli:main`; `cli._prog()` reports whichever name was typed.
@@ -62,7 +63,15 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   from outside the channel: the config no longer watching it, or an absence
   `absence_is_real` will vouch for. Never per file -- a notification missing
   from one scan of a synced folder is late at least as often as it is gone.
-- `check_action` returning `False` hides a binding; `None` only dims it.
+- `check_action` returning `False` hides a binding; `None` only dims it. It is
+  also consulted on every dispatch, before the action runs, which is what
+  makes the two-key sequences work: `ctrl+w` and `g` arm a prefix, and the
+  keys that complete one are `priority=True` bindings -- checked ahead of the
+  whole focus chain -- that `check_action` refuses unless that exact prefix is
+  armed. Refused, they fall through to their own meanings, so `h` still
+  changes channel and `j` is still a letter in a draft. Anything else about
+  the ordering and both halves collapse: see `ui/vim.py` and the app's
+  `action_chord`.
 - A timed refresh -- the poll, the one-second tick -- can land before the
   widgets it writes into exist, or after they have gone: a dozen channels take
   longer than a second to mount, and removing a tab frees a pane's children
@@ -85,6 +94,18 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   far, so the whitelist above never gets asked. A test posts `LinkClicked` at
   the widget, not at the pane, because posting it at the pane skips the
   handler that used to be wrong.
+- Two searches share `/`, and which one runs is decided by focus alone:
+  `ChannelPane._reading()` names the two panes that hold a document, and
+  everywhere else `/` is the channel filter it always was. They keep separate
+  state -- `self.filter` against the rows, `self._find` against the text -- so
+  `esc` can undo the nearer one first.
+- A match in the reader is shown by tinting the `MarkdownBlock` that holds it,
+  because a rendered document is a column of widgets and not text on screen:
+  `find.block_for` picks the innermost block whose `source_range` covers the
+  line. A delivered `.txt` is laid out here, so that one is highlighted to the
+  character with `Content` spans. Matching runs on the *source* and offsets
+  come from a regex over the original string -- casefolding is not
+  length-preserving, and a shifted offset lights the wrong words.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by
   option id, not index: the list also holds separators and the divider.

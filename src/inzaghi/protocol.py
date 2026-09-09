@@ -36,7 +36,9 @@ Three files are **overwritten** at every wakeup:
 
 * `STATUS.md` — what is running, where it is, ETA, last commit. Include a
   `## Waiting on you` section; put `Nothing.` there when nothing is blocked, and
-  the exact question when something is.
+  the exact question when something is. Only the first sentence of that section
+  is read, so `Nothing.` followed by context is still nothing — and a question
+  must not open with the word, or it is read as the answer.
 * `HEARTBEAT.md` — liveness, independent of any job, so a dead session is
   visible. Key lines, as bullets:
   `- **updated:** <now>`, `- **next update expected by:** <now + interval>`,

@@ -17,6 +17,7 @@ from textual import on, work
 from textual.worker import get_current_worker
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.timer import Timer
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from .. import attach
@@ -32,10 +33,29 @@ from .modals import ConfirmScreen
 from .mounting import composed
 from .overview import OverviewPane
 from .rows import HEALTH_STYLE
+from .vim import half_page, move
 
 OVERVIEW_ID = "overview"
 #: Inside OverviewPane; its presence answers for the whole overview subtree.
 OVERVIEW_TABLE = "#overview-table"
+
+#: Which way ``ctrl+w`` and a key means to move the keyboard.
+PANES = {"h": "left", "j": "down", "k": "up", "l": "right"}
+
+#: Every two-key sequence, as {prefix: {second key: what it runs}}.  One table
+#: rather than a chain of conditions, because it is also the answer to "may
+#: this key be taken out of the chain" -- see ``check_action``.
+CHORDS: dict[str, dict[str, str]] = {
+    "g": {"g": "motion('top')", "f": "open_reference"},
+    "window": {key: f"pane('{way}')" for key, way in PANES.items()},
+    "]": {"f": "reference(1)"},
+    "[": {"f": "reference(-1)"},
+}
+
+#: How long a prefix waits for the key that finishes it.  Vim calls this
+#: timeoutlen.  A sequence nobody completed has to expire rather than sit
+#: there waiting to give the next h a meaning it was not typed for.
+CHORD_SECONDS = 1.0
 
 
 class InzaghiApp(App):
@@ -46,8 +66,6 @@ class InzaghiApp(App):
         Binding("q", "quit", "Quit"),
         Binding("o", "overview", "Overview"),
         Binding("tab", "next_channel", "Next", show=False),
-        Binding("]", "next_channel", "Next channel", show=False),
-        Binding("[", "prev_channel", "Prev channel", show=False),
         # The arrows step through the tabs from wherever the keyboard is,
         # because the widgets that bind them cannot use them: a vertical-only
         # scroll has no sideways to go, and a row cursor has no column to move
@@ -62,8 +80,40 @@ class InzaghiApp(App):
         Binding("u", "quick('RESUME')", "Resume", show=False),
         Binding("x", "quick('STOP')", "Stop"),
         Binding("a", "mark_all_read", "Mark read"),
-        Binding("k", "clean_conflicts", "Clean"),
+        Binding("K", "clean_conflicts", "Clean"),
         Binding("r", "refresh_all", "Refresh"),
+        Binding("i", "compose", "Compose", show=False),  # insert, as in write
+        Binding("semicolon", "command_palette", "Commands", show=False),
+        # -- vim motions, in whichever pane holds the keyboard -------------
+        # j and k are the arrows, down to the wrap at the end of a list: the
+        # same key doing the same thing, not a second nearly-identical one.
+        Binding("j", "motion('down')", "Down", show=False),
+        Binding("k", "motion('up')", "Up", show=False),
+        Binding("G", "motion('bottom')", "Bottom", show=False),
+        Binding("ctrl+d", "half(1)", "Half page down", show=False),
+        Binding("ctrl+u", "half(-1)", "Half page up", show=False),
+        # -- the two-key sequences ------------------------------------------
+        # A prefix arms; the keys that complete it are the priority bindings
+        # below, which run ahead of everything else in the chain and are
+        # refused by check_action until there is something to complete. That
+        # is what lets g, h and l keep their own meanings the rest of the time.
+        Binding("g", "prefix('g')", "Top (gg)", show=False),
+        Binding("ctrl+w", "prefix('window')", "Pane", show=False),
+        # ] and [ are prefixes now rather than channel keys of their own:
+        # h, l, the arrows and tab all still step the tabs, and ]f is worth
+        # more than a fifth way to do that.
+        Binding("]", "prefix(']')", "Next file", show=False),
+        Binding("[", "prefix('[')", "Prev file", show=False),
+        Binding("g", "chord('g')", priority=True, show=False),
+        Binding("h", "chord('h')", priority=True, show=False),
+        Binding("j", "chord('j')", priority=True, show=False),
+        Binding("k", "chord('k')", priority=True, show=False),
+        Binding("l", "chord('l')", priority=True, show=False),
+        Binding("f", "chord('f')", priority=True, show=False),
+        # Channels are the only horizontal axis here, so h and l are what the
+        # arrows are.
+        Binding("l", "next_channel", "Next channel", show=False),
+        Binding("h", "prev_channel", "Prev channel", show=False),
     ]
 
     def __init__(self, config: Config, channels: list[Channel] | None = None) -> None:
@@ -78,6 +128,10 @@ class InzaghiApp(App):
         self._pane_counter = count()
         self._known_events: dict[str, set[str]] = {}
         self._known_health: dict[str, str] = {}
+        #: The half-typed key sequence, if there is one, and the timer that
+        #: gives up on it.
+        self._pending: str | None = None
+        self._pending_timer: Timer | None = None
 
     # -- layout -----------------------------------------------------------
 
@@ -337,6 +391,70 @@ class InzaghiApp(App):
     def action_overview(self) -> None:
         self.query_one("#tabs", TabbedContent).active = OVERVIEW_ID
 
+    # -- vim keys ---------------------------------------------------------
+
+    def action_motion(self, motion: str) -> None:
+        """j, k, gg, G: whatever the pane holding the keyboard makes of them."""
+        if self.focused is not None:
+            move(self.focused, motion)
+
+    def action_half(self, direction: int) -> None:
+        if self.focused is not None:
+            half_page(self.focused, direction)
+
+    def action_prefix(self, name: str) -> None:
+        """Arm a two-key sequence: ``g`` for gg, ``ctrl+w`` for the panes.
+
+        Nothing is drawn to say it is armed, the way vim draws nothing for the
+        g in gg. The timer is what keeps that honest: a prefix that is never
+        completed goes away instead of waiting all afternoon to swallow a key.
+        """
+        self._pending = name
+        if self._pending_timer is not None:
+            self._pending_timer.stop()
+        self._pending_timer = self.set_timer(CHORD_SECONDS, self._forget_prefix)
+
+    def _forget_prefix(self) -> None:
+        self._pending = None
+        self._pending_timer = None
+
+    async def action_chord(self, key: str) -> None:
+        """The second key of a sequence, once ``check_action`` has allowed it."""
+        pending, self._pending = self._pending, None
+        if self._pending_timer is not None:
+            self._pending_timer.stop()
+            self._pending_timer = None
+        action = CHORDS.get(pending or "", {}).get(key)
+        if action:
+            await self.run_action(action)
+
+    def action_reference(self, step: int) -> None:
+        """``]f`` and ``[f``: through the files the entry on screen delivered."""
+        pane = self._current_pane()
+        if pane is not None:
+            pane.step_reference(step)
+
+    def action_open_reference(self) -> None:
+        """``gf``: vim's go-to-file, on whichever reference is selected."""
+        pane = self._current_pane()
+        if pane is not None:
+            pane.open_reference()
+
+    def _current_pane(self) -> ChannelPane | None:
+        channel = self.current_channel()
+        return self._pane_for(channel.key) if channel else None
+
+    def action_pane(self, direction: str) -> None:
+        """Move the keyboard one pane over, within the channel on screen.
+
+        The overview is a single pane, so there is nowhere to go from it and
+        nothing to do -- which is the same answer vim gives for ctrl+w l in a
+        window with no split.
+        """
+        pane = self._current_pane()
+        if pane is not None:
+            pane.focus_neighbour(direction)
+
     def action_next_channel(self) -> None:
         self._step(1)
 
@@ -445,6 +563,14 @@ class InzaghiApp(App):
         """
         if action == "clean_conflicts":
             return bool(self._conflicts())
+        if action == "chord":
+            # These are priority bindings, so they are asked about before
+            # anything else in the chain can answer -- including a text box,
+            # where a letter has to stay a letter. Only the key that actually
+            # finishes the armed sequence gets through; every other key is
+            # refused here and carries on to whatever it usually does.
+            key = str(parameters[0]) if parameters else ""
+            return key in CHORDS.get(self._pending or "", {})
         return True
 
     def _conflicts(self) -> list:

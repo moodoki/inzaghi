@@ -111,7 +111,7 @@ async def test_cleaning_asks_first_and_cancelling_keeps_the_files(conflicted):
     async with app.run_test() as pilot:
         await open_channel(app, pilot)
         conflicts = app.snapshots[str(conflicted)].conflicts
-        await pilot.press("k")
+        await pilot.press("K")
         await pilot.pause()
         assert isinstance(app.screen, ConfirmScreen)
         await pilot.press("n")
@@ -124,7 +124,7 @@ async def test_confirming_deletes_them_and_the_warning_clears(conflicted):
     async with app.run_test() as pilot:
         await open_channel(app, pilot)
         conflicts = list(app.snapshots[str(conflicted)].conflicts)
-        await pilot.press("k")
+        await pilot.press("K")
         await pilot.pause()
         await pilot.press("y")
         await settle(app, pilot)

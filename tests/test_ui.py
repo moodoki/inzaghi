@@ -9,6 +9,7 @@ from pathlib import Path
 from shutil import rmtree
 from unittest import mock
 
+from textual.command import CommandPalette
 from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent, TextArea
 
 from conftest import write
@@ -17,7 +18,7 @@ from inzaghi import channel as channel_module
 from inzaghi import compose as composer_module
 from inzaghi.config import ChannelSpec, Config, RootSpec
 from inzaghi.protocol import init_channel
-from inzaghi.ui.app import OVERVIEW_ID, InzaghiApp
+from inzaghi.ui.app import CHORD_SECONDS, OVERVIEW_ID, InzaghiApp
 from inzaghi.ui.channel_view import ChannelPane
 from inzaghi.ui.overview import (
     PIGEON,
@@ -327,7 +328,7 @@ async def test_cleaning_conflicts_never_blocks_the_ui(channel_root):
         app.query_one("#tabs", TabbedContent).active = "ch0"
         await pilot.pause()
         with mock.patch("inzaghi.ui.app.remove_conflicts", watched):
-            await pilot.press("k")
+            await pilot.press("K")
             await pilot.pause()
             await pilot.press("y")
             await settle(app, pilot)
@@ -809,3 +810,241 @@ async def test_the_arrows_move_between_a_dialogs_buttons(channel_root):
         await pilot.press("escape")
         await settle(app, pilot)
         assert list((channel_root / "inbox").glob("*.md")) == []
+
+
+# -- vim keys -------------------------------------------------------------
+
+
+async def open_channel(app, pilot) -> ChannelPane:
+    await settle(app, pilot)
+    await pilot.press("right")  # off the overview, onto the first channel
+    await pilot.pause()
+    return app.query_one(ChannelPane)
+
+
+async def test_j_and_k_are_the_arrows(channel_root):
+    """The same key doing the same thing, not a second nearly-identical one."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        timeline = app.screen.query_one("#timeline", OptionList)
+        assert timeline.highlighted == 0
+
+        await pilot.press("j", "j")
+        assert timeline.highlighted == 2
+        await pilot.press("k")
+        assert timeline.highlighted == 1
+
+
+async def test_gg_and_G_reach_both_ends_of_a_list(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        timeline = app.screen.query_one("#timeline", OptionList)
+
+        await pilot.press("G")
+        assert timeline.highlighted == timeline.option_count - 1
+
+        await pilot.press("g", "g")
+        assert timeline.highlighted == 0
+
+
+async def test_a_lone_g_expires_rather_than_lying_in_wait(channel_root):
+    """Vim's timeoutlen: an unfinished sequence has to go away, or it sits
+    there ready to give the next key a meaning nobody typed it for. The real
+    timer, since the timer is the whole of the mechanism."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        await pilot.press("g")
+        assert app._pending == "g"
+
+        await pilot.pause(CHORD_SECONDS + 0.2)
+        assert app._pending is None
+
+
+async def test_a_key_that_cannot_finish_a_sequence_keeps_its_own_meaning(channel_root):
+    """g then l is an abandoned g and an l that still changes channel: only
+    the key that completes the sequence is taken out of the chain."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        await pilot.press("g", "l")
+        await pilot.pause()
+        assert app.query_one("#tabs", TabbedContent).active == OVERVIEW_ID
+
+
+async def test_ctrl_d_moves_a_list_by_half_a_screen(channel_root):
+    """And stops at the end rather than wrapping round it, which is what a
+    dozen single steps through Textual's cursor actions would do."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        timeline = app.screen.query_one("#timeline", OptionList)
+
+        await pilot.press("ctrl+d")
+        assert timeline.highlighted > 0
+        for _ in range(6):
+            await pilot.press("ctrl+d")
+        assert timeline.highlighted == timeline.option_count - 1, "it wrapped"
+
+        for _ in range(8):
+            await pilot.press("ctrl+u")
+        assert timeline.highlighted == 0
+
+
+async def test_ctrl_d_scrolls_a_document(channel_root):
+    """The same key in a pane with no cursor: half a screen of scrolling."""
+    write(
+        channel_root / "notifications" / "STATUS.md",
+        "# status\n\n" + "".join(f"- line {i}\n" for i in range(80)),
+    )
+    app = make_app(channel_root)
+    async with app.run_test(size=(100, 20)) as pilot:
+        await open_channel(app, pilot)
+        reader = app.screen.query_one("#reader")
+        reader.focus()
+        await pilot.pause()
+        assert reader.scroll_offset.y == 0
+
+        await pilot.press("ctrl+d")
+        await pilot.pause()
+        moved = reader.scroll_offset.y
+        assert moved > 0
+
+        await pilot.press("ctrl+u")
+        await pilot.pause()
+        assert reader.scroll_offset.y < moved
+
+
+async def test_i_opens_the_composer(channel_root):
+    """Insert mode, as in write a message."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        await pilot.press("i")
+        await pilot.pause()
+        assert app.screen.query_one(Composer).display is True
+
+
+async def test_a_letter_in_a_draft_is_a_letter(channel_root):
+    """The priority bindings that catch a chord must not catch typing: j, k,
+    h and l are letters in a message, and g is a letter in a word."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        await pilot.press("i")
+        await pilot.pause()
+        await pilot.press("g", "j", "k", "h", "l", "G")
+        assert app.screen.query_one(TextArea).text == "gjkhlG"
+        assert app.query_one("#tabs", TabbedContent).active == "ch0"
+
+
+async def test_ctrl_w_walks_between_the_panes(channel_root):
+    """The vimrc's window keys, behind vim's own window prefix: the timeline
+    on the left, the reader on the right."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        assert app.focused.id == "timeline"
+
+        await pilot.press("ctrl+w", "l")
+        await pilot.pause()
+        assert app.focused.id == "reader"
+
+        await pilot.press("ctrl+w", "h")
+        await pilot.pause()
+        assert app.focused.id == "timeline"
+
+
+async def test_ctrl_w_skips_a_pane_that_is_not_on_screen(channel_root):
+    """Most notifications deliver no files and no draft is open, so most of
+    the map is not there to be moved into."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        await pilot.press("ctrl+w", "l")
+        await pilot.pause()
+        assert app.focused.id == "reader"
+
+        await pilot.press("ctrl+w", "j")  # nothing under the reader yet
+        await pilot.pause()
+        assert app.focused.id == "reader"
+
+
+async def test_ctrl_w_reaches_an_open_draft_and_the_top_of_a_column(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        await pilot.press("i")  # the draft box, under the timeline
+        await pilot.pause()
+        app.screen.query_one("#timeline", OptionList).focus()
+        await pilot.pause()
+
+        await pilot.press("ctrl+w", "j")
+        await pilot.pause()
+        assert app.focused.id == "compose-text"
+
+        # ctrl+w is a word delete in a text box, as it is in vim's insert
+        # mode, so the way out of a draft is escape.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.focused.id == "timeline"
+
+        await pilot.press("ctrl+w", "k")  # already at the top of the column
+        await pilot.pause()
+        assert app.focused.id == "timeline"
+
+
+async def test_the_overview_has_nowhere_to_go(channel_root):
+    """One pane, so ctrl+w l is the no-op vim gives for a window with no split."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert app.query_one("#tabs", TabbedContent).active == OVERVIEW_ID
+        await pilot.press("ctrl+w", "l")
+        await pilot.pause()
+        assert app.focused is app.query_one(DataTable)
+        assert app.query_one("#tabs", TabbedContent).active == OVERVIEW_ID
+
+
+async def test_semicolon_opens_the_command_palette(channel_root):
+    """The vimrc maps ; to :, so ; is where a command line is looked for."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        await pilot.press("semicolon")
+        await pilot.pause()
+        assert isinstance(app.screen, CommandPalette)
+
+
+async def test_half_a_page_on_the_overview_stops_at_the_last_channel(tmp_path):
+    """The overview's cursor is read-only -- a DataTable exposes cursor_row
+    without a setter -- so the end of the list has to be found by stepping
+    back, not by putting the cursor where it was."""
+    from inzaghi.protocol import init_channel
+
+    roots = [init_channel(tmp_path / f"chan{i:02d}").channel.root for i in range(6)]
+    app = channels_only_app(*roots)
+    async with app.run_test(size=(100, 24)) as pilot:
+        await settle(app, pilot)
+        table = app.query_one(DataTable)
+        assert app.focused is table
+
+        for _ in range(4):
+            await pilot.press("ctrl+d")
+        assert table.cursor_row == table.row_count - 1
+
+        for _ in range(4):
+            await pilot.press("ctrl+u")
+        assert table.cursor_row == 0
+
+
+async def test_a_letter_in_the_search_box_is_a_letter(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await open_channel(app, pilot)
+        await pilot.press("slash")
+        await pilot.pause()
+        await pilot.press("s", "h", "a", "r", "d", "j", "k", "g")
+        assert app.screen.query_one("#search", Input).value == "shardjkg"

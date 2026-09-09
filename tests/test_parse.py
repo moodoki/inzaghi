@@ -95,3 +95,23 @@ def test_kv_bullets_and_sections():
 def test_slugify_is_filename_safe():
     assert parse.slugify("Pause the GPU jobs, please!") == "pause-the-gpu-jobs-please"
     assert parse.slugify("!!!") == "message"
+
+
+def test_first_sentence_stops_at_the_first_full_stop_or_line_break():
+    assert parse.first_sentence("Nothing. Phase 3c is running.") == "Nothing"
+    assert parse.first_sentence("Nothing blocking\n\nBut decide the batch size.") == (
+        "Nothing blocking"
+    )
+    assert parse.first_sentence("Which checkpoint?") == "Which checkpoint"
+
+
+def test_first_sentence_drops_what_prose_wraps_a_word_in():
+    """A session writing `- **Nothing.**` is saying the same word as one
+    writing `Nothing`."""
+    for written in ("**Nothing.**", "- Nothing.", "*Nothing*", "`Nothing`", "  Nothing  "):
+        assert parse.first_sentence(written) == "Nothing", written
+
+
+def test_first_sentence_of_nothing_is_nothing():
+    assert parse.first_sentence("") == ""
+    assert parse.first_sentence("N/A") == "N/A"

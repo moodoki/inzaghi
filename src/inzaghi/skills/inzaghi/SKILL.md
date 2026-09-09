@@ -81,7 +81,10 @@ prevents, it is not a heartbeat. Always state when the next update is due.
 which phase, an ETA, the last commit. Keep it short and current. It must
 contain a `## Waiting on you` section — `Nothing.` when nothing is blocked, and
 the exact question, with the options you see, when something is. This is the
-field the watcher's overview panel surfaces first.
+field the watcher's overview panel surfaces first, and only its **first
+sentence** is read: `Nothing.` followed by a paragraph of context is still
+nothing, while a question that opens with the word is read as the answer and
+never flagged.
 
 **`notifications/TASK_OVERVIEW.md`** is progress across the whole project, one
 row per task, for the person who has not looked in three days. Optional, but
