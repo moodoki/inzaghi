@@ -62,7 +62,15 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   from outside the channel: the config no longer watching it, or an absence
   `absence_is_real` will vouch for. Never per file -- a notification missing
   from one scan of a synced folder is late at least as often as it is gone.
-- `check_action` returning `False` hides a binding; `None` only dims it.
+- `check_action` returning `False` hides a binding; `None` only dims it. It is
+  also consulted on every dispatch, before the action runs, which is what
+  makes the two-key sequences work: `ctrl+w` and `g` arm a prefix, and the
+  keys that complete one are `priority=True` bindings -- checked ahead of the
+  whole focus chain -- that `check_action` refuses unless that exact prefix is
+  armed. Refused, they fall through to their own meanings, so `h` still
+  changes channel and `j` is still a letter in a draft. Anything else about
+  the ordering and both halves collapse: see `ui/vim.py` and the app's
+  `action_chord`.
 - A timed refresh -- the poll, the one-second tick -- can land before the
   widgets it writes into exist, or after they have gone: a dozen channels take
   longer than a second to mount, and removing a tab frees a pane's children

@@ -152,6 +152,30 @@ again in its own chronological place — cannot leave anything new underneath it
 Your own messages and the pinned panels are never unread, so they never make a
 boundary on their own.
 
+## Moving about
+
+The arrows and `tab` work, and so do vim's keys, on the grounds that this is a
+window somebody leaves open beside their editor all day:
+
+| key | where it goes |
+|---|---|
+| `j` `k` | down and up, in whichever pane holds the keyboard: a list moves its cursor, a document scrolls |
+| `gg` `G` | the top and the bottom of it |
+| `ctrl+d` `ctrl+u` | half a screen either way |
+| `h` `l` | the previous and next channel — the only horizontal axis here — same as `←` `→`, `[` `]` and `tab` |
+| `ctrl+w` `h` `j` `k` `l` | the pane to the left, below, above, to the right |
+| `i` | write a message, as in insert |
+| `;` | the command palette |
+
+`ctrl+w` is vim's own window prefix rather than the bare `ctrl+h/j/k/l` a
+vim-tmux-navigator setup uses, for two reasons: tmux binds those four at its
+root table and forwards them only to a pane running vim, and `ctrl+h` and
+`ctrl+j` are the same bytes as Backspace and Enter unless the terminal is
+speaking the kitty keyboard protocol. The prefix has neither problem.
+
+In a draft or the search box the letters are letters, and `ctrl+w` deletes a
+word — the way insert mode behaves in vim. `esc` is how you leave.
+
 ## Writing a message
 
 `c` opens a draft box in the bottom half of the timeline column, not over the
@@ -168,7 +192,7 @@ keeps the draft to retry.
 
 A sync client that cannot merge an overwritten file leaves a duplicate beside
 it — `STATUS (conflicted copy 2026-09-05).md`. These are never shown as events.
-When a channel has some, the strip says so and `k` offers to delete them, after
+When a channel has some, the strip says so and `K` offers to delete them, after
 a confirmation listing exactly what will go. The key is hidden otherwise, and on
 a `read_only` channel: read-only means untouched, not merely unwritten-to.
 

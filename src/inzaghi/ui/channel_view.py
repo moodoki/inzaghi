@@ -9,6 +9,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.binding import Binding
+from textual.widget import Widget
 from textual.widgets import Input, Markdown, OptionList, Static
 from textual.widgets.option_list import Option, OptionDoesNotExist
 
@@ -35,6 +36,16 @@ from .rows import (
 #: which one it means.
 TIMELINE = "timeline"
 ATTACHMENTS = "attachments"
+
+#: The panes the keyboard can reach, as they sit on screen: two columns, each
+#: listed top to bottom, naming the widget in each that actually takes focus.
+#: This is the map ``ctrl+w`` and a direction walk, so it has to stay in the
+#: order the layout puts them in -- and a pane that is not on screen is not
+#: somewhere the cursor can go, so hidden ones drop out as they are read.
+COLUMNS = (
+    (f"#{TIMELINE}", "#compose-text"),
+    ("#reader", f"#{ATTACHMENTS}", "#preview-body"),
+)
 
 def _line(markup: str) -> Text:
     """One row, clipped rather than wrapped: the timeline is a list, not prose."""
@@ -267,7 +278,7 @@ class ChannelPane(Vertical):
         if snapshot.conflicts:
             count = len(snapshot.conflicts)
             noun = "copy" if count == 1 else "copies"
-            hint = "ignored" if self.channel.read_only else "press k to delete"
+            hint = "ignored" if self.channel.read_only else "press K to delete"
             line += f"\n[yellow]{count} sync-conflict {noun}[/] [dim]· {hint}[/]"
         self.query_one("#strip", Static).update(line)
 
@@ -500,6 +511,51 @@ class ChannelPane(Vertical):
 
     def focus_timeline(self) -> None:
         self.query_one(f"#{TIMELINE}", OptionList).focus()
+
+    # -- moving between panes ---------------------------------------------
+
+    def focus_neighbour(self, direction: str) -> None:
+        """Move the keyboard one pane over, the way ``ctrl+w`` does in vim.
+
+        Sideways keeps the row where it can: coming out of the files strip and
+        back returns to the files strip, not to the top of the column. Neither
+        axis wraps -- ``ctrl+w k`` at the top of a column is a no-op, because
+        in vim it is one too.
+        """
+        columns = [[pane for pane in map(self._pane, ids) if pane] for ids in COLUMNS]
+        here = self.app.focused
+        for x, column in enumerate(columns):
+            if here in column:
+                y = column.index(here)
+                break
+        else:
+            # The keyboard is somewhere that is not a pane -- the search box,
+            # or nowhere at all. Then this is a request to be in a pane.
+            x, y = 0, 0
+            here = None
+
+        if direction in ("left", "right"):
+            x = max(0, min(len(columns) - 1, x + (1 if direction == "right" else -1)))
+        elif here is not None:
+            y += 1 if direction == "down" else -1
+
+        column = columns[x]
+        if not column:
+            return  # nothing on screen in that column to move to
+        if direction in ("up", "down") and not 0 <= y < len(column):
+            return  # off the end: at the top of a column, ctrl+w k does nothing
+        column[max(0, min(len(column) - 1, y))].focus()
+
+    def _pane(self, selector: str) -> Widget | None:
+        """The widget at ``selector``, if it is actually on screen.
+
+        Its own ``display`` is not enough: the file preview's body is always
+        displayed inside a container that is hidden until a file is opened.
+        """
+        for widget in self.query(selector):
+            if all(getattr(node, "display", True) for node in widget.ancestors_with_self):
+                return widget
+        return None
 
     # -- composing --------------------------------------------------------
 
