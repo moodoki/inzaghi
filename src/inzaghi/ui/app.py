@@ -48,6 +48,14 @@ class InzaghiApp(App):
         Binding("tab", "next_channel", "Next", show=False),
         Binding("]", "next_channel", "Next channel", show=False),
         Binding("[", "prev_channel", "Prev channel", show=False),
+        # The arrows step through the tabs from wherever the keyboard is,
+        # because the widgets that bind them cannot use them: a vertical-only
+        # scroll has no sideways to go, and a row cursor has no column to move
+        # to, and Textual hands a key back rather than eating it when the
+        # action it is bound to would do nothing. A text box is the exception,
+        # and keeps them: in a draft they are a cursor.
+        Binding("right", "next_channel", "Next channel", show=False),
+        Binding("left", "prev_channel", "Prev channel", show=False),
         Binding("c", "compose", "Compose"),
         Binding("s", "quick('STATUS')", "Status"),
         Binding("p", "quick('PAUSE')", "Pause"),

@@ -9,7 +9,7 @@ from pathlib import Path
 from shutil import rmtree
 from unittest import mock
 
-from textual.widgets import DataTable, OptionList, Static, TabbedContent, TextArea
+from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent, TextArea
 
 from conftest import write
 
@@ -709,3 +709,103 @@ async def test_the_pigeon_never_costs_a_channel_a_row(tmp_path):
         await settle(app, pilot)
         assert app.query_one(DataTable).row_count == 14
         assert app.screen.query_one("#pigeon-dock").display is False
+
+
+# -- moving between channels ---------------------------------------------
+
+
+def two_channels(tmp_path) -> InzaghiApp:
+    from inzaghi.protocol import init_channel
+
+    roots = [init_channel(tmp_path / name).channel.root for name in ("alpha", "beta")]
+    return channels_only_app(*roots)
+
+
+def active(app) -> str:
+    return app.query_one("#tabs", TabbedContent).active
+
+
+async def test_the_arrows_step_through_the_tabs(tmp_path):
+    app = two_channels(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert active(app) == OVERVIEW_ID
+
+        await pilot.press("right")
+        assert active(app) == "ch0"
+        await pilot.press("right")
+        assert active(app) == "ch1"
+        await pilot.press("right")
+        assert active(app) == OVERVIEW_ID, "the end wraps, the way ] does"
+        await pilot.press("left")
+        assert active(app) == "ch1"
+
+
+async def test_the_arrows_work_wherever_the_keyboard_is(tmp_path):
+    """Two of the widgets that hold focus bind these keys themselves: the
+    overview table, to a column move its row cursor does not make, and the
+    reader, to a sideways scroll a vertical-only pane does not have. Both hand
+    them back -- Textual bubbles a key whose action would do nothing. Guarded
+    because the day the reader gains a horizontal scrollbar it stops."""
+    app = two_channels(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert app.focused is app.query_one(DataTable)
+        await pilot.press("right")
+        assert active(app) == "ch0"
+
+        reader = app.screen.query_one("#reader")
+        reader.focus()
+        await pilot.pause()
+        assert app.focused is reader
+        await pilot.press("right")
+        assert active(app) == "ch1"
+
+
+async def test_the_arrows_stay_out_of_a_draft(tmp_path):
+    """In a draft they are a cursor. Nobody expects the channel to change
+    under a half-typed message."""
+    app = two_channels(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("right")
+        await pilot.press("c")
+        await pilot.pause()
+        await pilot.press("p", "a", "u", "s", "e", "left", "left", "right")
+        assert active(app) == "ch0"
+        assert app.screen.query_one(TextArea).text == "pause"
+
+
+async def test_the_arrows_stay_out_of_the_search_box(tmp_path):
+    app = two_channels(tmp_path)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("right")
+        await pilot.press("slash")
+        await pilot.pause()
+        await pilot.press("s", "h", "a", "r", "d", "left", "right")
+        assert active(app) == "ch0"
+        assert app.screen.query_one("#search", Input).value == "shard"
+
+
+async def test_the_arrows_move_between_a_dialogs_buttons(channel_root):
+    """Not the tabs behind it: this dialog is asking whether to stop a run."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("right")
+        await pilot.press("x")  # STOP, which asks first
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+
+        await pilot.press("right")
+        await pilot.pause()
+        assert app.focused.id == "no"
+        await pilot.press("left")
+        await pilot.pause()
+        assert app.focused.id == "yes"
+        assert active(app) == "ch0", "the tab moved behind the dialog"
+
+        await pilot.press("escape")
+        await settle(app, pilot)
+        assert list((channel_root / "inbox").glob("*.md")) == []
