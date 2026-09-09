@@ -57,6 +57,16 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   deciding an absence, sending, deleting conflicts. That volume belongs to a
   sync client and answers when it likes; a call that waits on it stops the app
   redrawing. `tests/test_ui.py` asserts the thread, not the timing.
+- A file that is overwritten in place is never trusted to a `stat`. On a File
+  Provider mount -- iCloud, Dropbox, Nextcloud on macOS -- `stat` describes the
+  placeholder, not the file: the contents are on a server until something opens
+  them, and a provider nobody has asked keeps answering about the ones it last
+  wrote down. A cache that believes it stops opening the file, and a file
+  nobody opens is never fetched, so the heartbeat freezes until the process
+  restarts. `channel._doc` therefore reads every singleton on every scan,
+  fingerprints the rest by ctime and inode as well as mtime and size (a
+  heartbeat rewritten with a new timestamp is the same length as the last one),
+  and trusts nothing for longer than `CACHE_SECONDS`.
 - `channel.remove_conflicts` is the only code that deletes anything; it
   re-validates each path rather than trusting the snapshot it was given.
 - Read receipts are forgotten a whole channel at a time, and only on evidence

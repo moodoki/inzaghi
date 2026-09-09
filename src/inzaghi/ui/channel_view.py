@@ -132,7 +132,7 @@ class ChannelPane(Vertical):
         self._signature: list[tuple] = []
         self._divider: tuple[int, int] | None = None
         self._selected: str | None = None
-        #: (key, mtime, size) of what the reader is showing, so an unchanged
+        #: (key, document) of what the reader is showing, so an unchanged
         #: document is never re-rendered and never scrolled back to the top.
         self._showing: tuple | None = None
         #: The in-document search, which is a different question from
@@ -367,7 +367,12 @@ class ChannelPane(Vertical):
         jumping back to the top of a status file every time the session
         refreshes it would make it unreadable.
         """
-        stamp = (row.key, row.doc.mtime, row.doc.size)
+        # The whole document, not its mtime and size: the same stat that the
+        # scan may not believe is no better an answer to "is this the text I
+        # already drew" than it was to "is this the file I already read". A
+        # comparison of a few kilobytes, once a poll, against redrawing the
+        # pane under someone's eyes or leaving them reading a stale panel.
+        stamp = (row.key, row.doc)
         if stamp != self._showing:
             is_new_document = self._showing is None or self._showing[0] != row.key
             self._showing = stamp
