@@ -107,7 +107,14 @@ class Heartbeat:
     @classmethod
     def from_doc(cls, doc: Doc) -> "Heartbeat":
         bullets = parse.parse_kv_bullets(doc.body)
-        updated = _first_ts(doc.meta.get("updated"), bullets.get("updated"))
+        # ``ts`` counts as the update time. It is one of the four front-matter
+        # keys the contract advertises, and on a file that is overwritten at
+        # every wakeup "when this was written" is the same fact as "when this
+        # was last updated" -- a session that filled it in was following the
+        # contract, and was being read as though it had never said.
+        updated = _first_ts(
+            doc.meta.get("updated"), doc.meta.get("ts"), bullets.get("updated")
+        )
         next_by = _first_ts(
             doc.meta.get("next_by"),
             *(v for k, v in bullets.items() if "next update" in k or k == "next"),
@@ -158,7 +165,11 @@ class Status:
 
     @classmethod
     def from_doc(cls, doc: Doc) -> "Status":
-        updated = _first_ts(doc.meta.get("updated")) or parse.parse_timestamp(doc.body[:400])
+        # ``ts`` for the same reason as on a heartbeat: this file is rewritten
+        # whole at every wakeup, so the time it carries is the time it holds.
+        updated = _first_ts(doc.meta.get("updated"), doc.meta.get("ts")) or parse.parse_timestamp(
+            doc.body[:400]
+        )
         section = parse.find_section(doc.body, r"waiting on you|needs? you|blocked on you")
         waiting = None
         if section is not None:

@@ -27,6 +27,11 @@ rename into place — so the sync client never uploads half a file.
 
 ## notifications/ (session → watcher)
 
+Everything the session writes lives in this folder — the three files below and
+every event file. `README.md`, at the top of the channel, is the only exception,
+and it is written once. A status or heartbeat put anywhere else is not read at
+all: the watcher looks here and nowhere else.
+
 Three files are **overwritten** at every wakeup:
 
 * `STATUS.md` — what is running, where it is, ETA, last commit. Include a
@@ -118,7 +123,10 @@ needs_reply: true
 ---
 ```
 
-It is entirely optional; a channel that never emits it works the same.
+It is entirely optional; a channel that never emits it works the same. On the
+three overwritten files, `ts` is read as the time of that update — the same
+fact as an `updated:` bullet in the prose, since those files are rewritten
+whole every time.
 
 ## Housekeeping
 

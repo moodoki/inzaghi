@@ -25,6 +25,43 @@ def test_heartbeat_gives_a_deadline_and_a_cadence(channel):
     assert hb.state == "shard 3 of 8 reindexing on worker-2"
 
 
+def test_a_heartbeat_that_dates_itself_in_front_matter_is_dated(channel, channel_root):
+    """``ts`` is one of the four keys the contract advertises, and on a file
+    rewritten whole at every wakeup it is the time of that update. Reading it
+    as nothing left a session that had said when it spoke looking like one
+    that never had."""
+    write(
+        channel_root / "notifications" / "HEARTBEAT.md",
+        "---\nkind: heartbeat\nts: 2026-09-05T05:57:46+08:00\n"
+        "next_by: 2026-09-05T06:27:46+08:00\n---\n\n# heartbeat\n\nAlive, idle.\n",
+    )
+    hb = channel.scan(now=NOW).heartbeat
+    assert hb.updated == datetime(2026, 9, 5, 5, 57, 46, tzinfo=TZ)
+    assert hb.interval == timedelta(minutes=30)
+
+
+def test_an_explicit_updated_still_wins_over_the_general_ts(channel, channel_root):
+    """One says when this file was written, the other says what it means."""
+    write(
+        channel_root / "notifications" / "HEARTBEAT.md",
+        "---\nts: 2026-09-05T01:00:00+08:00\nupdated: 2026-09-05T05:57:46+08:00\n"
+        "next_by: 2026-09-05T06:27:46+08:00\n---\n\n# heartbeat\n",
+    )
+    assert channel.scan(now=NOW).heartbeat.updated == datetime(
+        2026, 9, 5, 5, 57, 46, tzinfo=TZ
+    )
+
+
+def test_a_status_dates_itself_in_front_matter_too(channel, channel_root):
+    write(
+        channel_root / "notifications" / "STATUS.md",
+        "---\nkind: status\nts: 2026-09-05T05:57:46+08:00\n---\n\n"
+        "# status\n\n## Waiting on you\nNothing.\n",
+    )
+    status = channel.scan(now=NOW).status
+    assert status.updated == datetime(2026, 9, 5, 5, 57, 46, tzinfo=TZ)
+
+
 @pytest.mark.parametrize(
     "when, health",
     [

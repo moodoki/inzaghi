@@ -46,6 +46,11 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
 
 - Parsers degrade to `None`; a session that drifts from the format makes one
   widget go quiet rather than crashing the app.
+- Every front-matter key the contract advertises has to be *read* somewhere.
+  `ts` on `STATUS.md` and `HEARTBEAT.md` is the time of that update, not only
+  an event's timestamp: those files are rewritten whole, so it is the same
+  fact. A documented key the parser ignores is worse than one nobody
+  documented -- the session did as it was told and still went unread.
 - Every write into a channel goes through `compose._atomic_write`.
 - Nothing that touches a channel's volume runs on the UI thread -- scanning,
   deciding an absence, sending, deleting conflicts. That volume belongs to a
