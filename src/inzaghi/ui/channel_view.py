@@ -16,7 +16,7 @@ from textual.widgets.option_list import Option, OptionDoesNotExist
 
 from . import find
 from .. import attach, fmt, parse
-from ..channel import Channel
+from ..channel import CACHE_SECONDS, Channel
 from ..model import Attachment, Snapshot
 from .composer import Composer
 from .mounting import composed
@@ -396,6 +396,10 @@ class ChannelPane(Vertical):
         # after the notification that announced it, and re-rendering the prose
         # for that would throw away the reader's place for nothing.
         self._show_attachments(row.attachments)
+        # Outside ``_show_attachments``, which returns early when the strip is
+        # unchanged: whether an open file needs reading again is a question
+        # about the file, and the strip is only what a stat said about it.
+        self._follow_preview(row.attachments)
 
     def _show_attachments(self, attachments: tuple[Attachment, ...]) -> None:
         """Refill the strip beneath the reader, only when it would differ.
@@ -429,16 +433,15 @@ class ChannelPane(Vertical):
             except OptionDoesNotExist:
                 pass  # that file is no longer delivered here
         self.refresh_bindings()
-        self._follow_preview(attachments)
 
     def _follow_preview(self, attachments: tuple[Attachment, ...]) -> None:
         """Keep an open file in step with what the scan now says about it.
 
-        The strip only differs when something about a delivery does, and for
-        the one being read that means the text on screen is out of date: the
-        session rewrote it, or it has only just finished crossing the sync.
-        The re-read goes back out through the app, because reading the volume
-        is the app's job and not this thread's.
+        Asked on every poll rather than only when the strip was rebuilt: the
+        strip is built out of what a stat said, and the whole reason the file
+        is read again below is that a stat can be wrong for as long as the
+        sync client behind it likes. The re-read goes back out through the
+        app, because reading the volume is the app's job and not this thread's.
 
         A file the notification no longer names, or that has stopped being
         readable, closes rather than sitting there as a stale copy of
@@ -450,10 +453,11 @@ class ChannelPane(Vertical):
         current = next((a for a in attachments if a.name == name), None)
         if current is None or not current.readable:
             self._close_preview()
-        elif not self.preview.is_current(current):
-            # Only when this file changed. The strip is rebuilt whenever any
-            # of the deliveries does, and re-reading the open one for a
-            # sibling that finished syncing is a read for nothing.
+        elif not self.preview.is_current(current) or self.preview.is_stale(CACHE_SECONDS):
+            # Only when this file changed, or when what is on screen has been
+            # believed for long enough. The strip is rebuilt whenever any of
+            # the deliveries changes, and re-reading the open one for a sibling
+            # that finished syncing is a read for nothing.
             self.post_message(self.Open(self.channel.key, current, refresh=True))
 
     @property

@@ -75,6 +75,13 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   fingerprints the rest by ctime and inode as well as mtime and size (a
   heartbeat rewritten with a new timestamp is the same length as the last one),
   and trusts nothing for longer than `CACHE_SECONDS`.
+- The same holds for the delivered file open in `ui/preview.py`, which is
+  compared by what a stat said about it: `Attachment.fingerprint` carries the
+  ctime and inode, `_follow_preview` runs on every poll rather than only when
+  the strip was rebuilt, and anything on screen for longer than
+  `CACHE_SECONDS` is read again regardless. When the text that comes back
+  disagrees with the stamp describing it, the text wins -- a re-read the clock
+  had to ask for is precisely the one whose stat never moved.
 - `channel.remove_conflicts` is the only code that deletes anything; it
   re-validates each path rather than trusting the snapshot it was given.
 - Read receipts are forgotten a whole channel at a time, and only on evidence
