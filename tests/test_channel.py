@@ -89,6 +89,42 @@ def test_a_real_question_raises_attention(channel, channel_root):
     assert snap.attention(NOW) is True
 
 
+def test_nothing_followed_by_reassurance_is_still_nothing(channel, channel_root):
+    """What a session actually writes: the word, then a paragraph about what
+    is running instead. Reading the whole section left the flag standing until
+    the next wakeup rewrote the file, which teaches you to ignore the flag."""
+    write(
+        channel_root / "notifications" / "STATUS.md",
+        "# status\n\n## Waiting on you\nNothing. Phase 3c is approved and running,"
+        " and the re-measurement is queued behind it.\n",
+    )
+    snap = channel.scan(now=NOW)
+    assert snap.waiting is None
+    assert snap.attention(NOW) is False
+
+
+def test_a_question_that_opens_with_the_word_nothing_still_asks(channel, channel_root):
+    """The asymmetry is deliberate: there the word is the subject of a
+    question rather than the answer to one, and an unflagged question waits
+    until somebody happens to read the channel."""
+    write(
+        channel_root / "notifications" / "STATUS.md",
+        "# status\n\n## Waiting on you\nNothing is blocked except the licence decision.\n",
+    )
+    snap = channel.scan(now=NOW)
+    assert snap.waiting == "Nothing is blocked except the licence decision."
+    assert snap.attention(NOW) is True
+
+
+def test_a_numbered_list_of_questions_asks(channel, channel_root):
+    write(
+        channel_root / "notifications" / "STATUS.md",
+        "# status\n\n## Waiting on you\n1. **An annotation owner.** 892 images.\n"
+        "2. **Whether to run the mechanism experiment.**\n",
+    )
+    assert channel.scan(now=NOW).waiting is not None
+
+
 def test_a_hard_stop_raises_attention(channel, channel_root):
     write(
         channel_root / "notifications" / "2026-09-05_0100_hard-stop_needs-a-decision.md",

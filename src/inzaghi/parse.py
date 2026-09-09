@@ -174,6 +174,24 @@ def first_heading(text: str) -> str | None:
     return None
 
 
+def first_sentence(text: str) -> str:
+    """The opening sentence of ``text``, without its markup or its bullet.
+
+    A sentence ends at ``.``, ``!``, ``?`` or a line break, whichever comes
+    first, so a one-word answer followed by a paragraph of explanation can be
+    read apart from the explanation.  What comes back is stripped of the things
+    prose wraps a word in -- a bullet, bold, italics -- because a session
+    writing ``- **Nothing.**`` is saying the same word as one writing
+    ``Nothing``.
+    """
+    head = text.strip().lstrip("-*+ \t")
+    for index, char in enumerate(head):
+        if char in ".!?\n":
+            head = head[:index]
+            break
+    return head.strip().strip("*_`").strip()
+
+
 @dataclass(frozen=True, slots=True)
 class Link:
     """One inline link or image, exactly as the prose wrote it."""

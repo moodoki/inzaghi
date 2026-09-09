@@ -164,6 +164,24 @@ class Status:
     NOTHING = frozenset({"", "-", "none", "none.", "nothing", "nothing.", "n/a", "na"})
 
     @classmethod
+    def says_nothing(cls, section: str) -> bool:
+        """Whether a "Waiting on you" section is answering "nothing".
+
+        The first sentence decides, not the whole section. A session with
+        nothing to ask writes "Nothing." and then, as often as not, a
+        paragraph about what is running instead -- and the flag has to go
+        quiet for that, or it stands until the next wakeup rewrites the file
+        and teaches you to ignore it.
+
+        Only a sentence that is *nothing but* the word counts. "Nothing is
+        blocked except the licence decision" keeps its flag, because there the
+        word is the subject of a question rather than the answer to one. That
+        asymmetry is deliberate: an unflagged question waits until somebody
+        happens to read the channel, which is the expensive way to be wrong.
+        """
+        return parse.first_sentence(section).lower() in cls.NOTHING
+
+    @classmethod
     def from_doc(cls, doc: Doc) -> "Status":
         # ``ts`` for the same reason as on a heartbeat: this file is rewritten
         # whole at every wakeup, so the time it carries is the time it holds.
@@ -174,7 +192,7 @@ class Status:
         waiting = None
         if section is not None:
             stripped = section.strip()
-            if stripped.lower().strip("*_ ") not in cls.NOTHING:
+            if not cls.says_nothing(stripped):
                 waiting = stripped
         if doc.meta.get("needs_reply", "").lower() in {"true", "yes", "1"} and not waiting:
             waiting = section or "(flagged by the session)"
