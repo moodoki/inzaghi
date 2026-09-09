@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Teck Yian Lim", email = "teckyian@gmail.com" }]
+authors = [{ name = "Teck Yian Lim" }]
 keywords = ["tui", "textual", "agents", "terminal", "sync"]
 classifiers = [
     "Development Status :: 3 - Alpha",
