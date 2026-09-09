@@ -4,9 +4,27 @@ version = "0.1.0"
 description = "A terminal interface to folder-based channels with unattended agent sessions."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Teck Yian Lim", email = "teckyian@gmail.com" }]
+keywords = ["tui", "textual", "agents", "terminal", "sync"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
 dependencies = [
     "textual>=0.80",
 ]
+
+[project.urls]
+Homepage = "https://github.com/moodoki/inzaghi"
+Repository = "https://github.com/moodoki/inzaghi"
+Issues = "https://github.com/moodoki/inzaghi/issues"
 
 [project.scripts]
 inzaghi = "inzaghi.cli:main"
@@ -19,7 +37,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]  # SPDX license / license-files metadata
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
