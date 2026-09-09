@@ -19,19 +19,23 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
+from .. import attach
 from .. import compose as composer
 from .. import fmt
 from ..channel import Channel, absence_is_real, remove_conflicts
 from ..compose import QUICK_ACTIONS, QUICK_BY_KEYWORD, QuickAction, ReadOnlyChannel
 from ..config import Config
-from ..model import LOUD_KINDS, Snapshot
+from ..model import LOUD_KINDS, Attachment, Snapshot
 from ..state import ReadState
 from .channel_view import ChannelPane
 from .modals import ConfirmScreen
+from .mounting import composed
 from .overview import OverviewPane
 from .rows import HEALTH_STYLE
 
 OVERVIEW_ID = "overview"
+#: Inside OverviewPane; its presence answers for the whole overview subtree.
+OVERVIEW_TABLE = "#overview-table"
 
 
 class InzaghiApp(App):
@@ -44,6 +48,14 @@ class InzaghiApp(App):
         Binding("tab", "next_channel", "Next", show=False),
         Binding("]", "next_channel", "Next channel", show=False),
         Binding("[", "prev_channel", "Prev channel", show=False),
+        # The arrows step through the tabs from wherever the keyboard is,
+        # because the widgets that bind them cannot use them: a vertical-only
+        # scroll has no sideways to go, and a row cursor has no column to move
+        # to, and Textual hands a key back rather than eating it when the
+        # action it is bound to would do nothing. A text box is the exception,
+        # and keeps them: in a draft they are a cursor.
+        Binding("right", "next_channel", "Next channel", show=False),
+        Binding("left", "prev_channel", "Prev channel", show=False),
         Binding("c", "compose", "Compose"),
         Binding("s", "quick('STATUS')", "Status"),
         Binding("p", "quick('PAUSE')", "Pause"),
@@ -224,16 +236,23 @@ class InzaghiApp(App):
             if pane is not None:
                 pane.update(snapshot, unread, now)
             self._badge(channel, snapshot, len(unread), now)
-        self.query_one(OverviewPane).update(self.channels, self.snapshots, unread_paths, now)
+        if composed(self, OVERVIEW_TABLE):
+            self.query_one(OverviewPane).update(self.channels, self.snapshots, unread_paths, now)
         # check_action() results are cached, so the footer would keep offering
         # "k Clean" after the last conflict copy was deleted.
         self.refresh_bindings()
 
     def _tick(self) -> None:
-        """Cheap per-second refresh: countdowns only, no disk access."""
+        """Cheap per-second refresh: countdowns only, no disk access.
+
+        The first of these fires one second in, which is not always long
+        enough for the tabs to have mounted -- see ``ui.mounting``.
+        """
         now = datetime.now().astimezone()
         for pane in self.query(ChannelPane):
             pane.update_strip(now)
+        if not composed(self, OVERVIEW_TABLE):
+            return
         unread = {
             channel.key: {str(event.path) for event in self.state.unread(channel.key, snapshot)}
             for channel in self.channels
@@ -344,6 +363,65 @@ class InzaghiApp(App):
             if str(item.path) == event.path:
                 self.state.mark_read(event.channel_key, item)
                 break
+
+    @on(ChannelPane.Open)
+    def _open_attachment(self, event: ChannelPane.Open) -> None:
+        """Show a delivered file. Reading, so a read-only channel allows it.
+
+        Two ways of showing one, decided by what the file is: a type this
+        reader renders is read into the bottom of the pane, and everything
+        else is handed to the desktop. Both wait on the channel's volume, so
+        both leave the UI thread here.
+        """
+        if event.attachment.disposition == "read":
+            self._read_attachment(event.channel_key, event.attachment, event.refresh)
+        else:
+            self._launch(event.attachment)
+
+    @work(thread=True, group="open")
+    def _read_attachment(self, key: str, attachment: Attachment, refresh: bool) -> None:
+        """Read a text delivery off the UI thread.
+
+        Not ``exclusive``: a poll can ask for a re-read while an earlier one is
+        still waiting on the sync client, and cancelling the earlier one would
+        leave whichever pane asked first showing text it has been told is
+        stale. Both land; the pane ignores the one it no longer wants.
+        """
+        try:
+            text, truncated = attach.read_text(attachment)
+        except attach.CannotOpen as exc:
+            self.call_from_thread(self.notify, str(exc), severity="error", timeout=20)
+            return
+        self.call_from_thread(self._previewed, key, attachment, text, truncated, refresh)
+
+    def _previewed(
+        self, key: str, attachment: Attachment, text: str, truncated: bool, refresh: bool
+    ) -> None:
+        pane = self._pane_for(key)
+        if pane is None:
+            return  # the tab went away while the volume was thinking
+        pane.show_preview(attachment, text, truncated, focus=not refresh)
+
+    @work(thread=True, group="open")
+    def _launch(self, attachment: Attachment) -> None:
+        """Hand the file to the desktop off the UI thread.
+
+        The launcher usually returns at once, but it is pointed at a path on a
+        synced volume: macOS ``open`` on a file iCloud has evicted waits for
+        the download before it hands anything over.
+        """
+        try:
+            command = attach.launch(attachment)
+        except attach.CannotOpen as exc:
+            self.call_from_thread(self.notify, str(exc), severity="error", timeout=20)
+            return
+        self.call_from_thread(self._opened, attachment, command)
+
+    def _opened(self, attachment: Attachment, command: list[str]) -> None:
+        verb = "Opening" if attachment.disposition == "view" else "Showing"
+        where = "" if attachment.disposition == "view" else " in its folder"
+        self.notify(f"{verb} {attachment.name}{where}")
+        self.log(f"attachment: {' '.join(command)}")
 
     def action_mark_all_read(self) -> None:
         channel = self.current_channel()

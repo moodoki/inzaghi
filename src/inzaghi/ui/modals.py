@@ -19,6 +19,12 @@ class ConfirmScreen(ModalScreen[bool]):
         Binding("escape", "no", "No"),
         Binding("n", "no", "No"),
         Binding("y", "yes", "Yes"),
+        # Left and right change channel everywhere else, and a Button binds
+        # neither, so without these the tabs would shuffle about behind a
+        # dialog asking whether to stop a run. In front of two buttons they
+        # mean what they look like they mean.
+        Binding("left", "previous_button", "Previous", show=False),
+        Binding("right", "next_button", "Next", show=False),
     ]
 
     def __init__(self, question: str, detail: str = "", confirm_label: str = "Send") -> None:
@@ -35,6 +41,12 @@ class ConfirmScreen(ModalScreen[bool]):
             with Horizontal(id="confirm-buttons"):
                 yield Button(f"{self._confirm_label} (y)", variant="error", id="yes")
                 yield Button("Cancel (n)", id="no")
+
+    def action_next_button(self) -> None:
+        self.focus_next()
+
+    def action_previous_button(self) -> None:
+        self.focus_previous()
 
     def action_yes(self) -> None:
         self.dismiss(True)

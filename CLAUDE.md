@@ -27,12 +27,17 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/parse.py     pure parsers over filenames and Markdown prose
     src/inzaghi/model.py     Doc, Event, Heartbeat, Status, Thread, Snapshot
     src/inzaghi/channel.py   folder -> Snapshot, with a content cache
+    src/inzaghi/attach.py    files a notification delivers: what one is,
+                             reading a text one, launching the rest
     src/inzaghi/config.py    TOML config, root scanning, discovery
     src/inzaghi/state.py     local read receipts (never written into a channel)
     src/inzaghi/compose.py   atomic writes into inbox/
     src/inzaghi/skill.py     installing the protocol into an agent harness
     src/inzaghi/skills/      the session-side skill, shipped as package data
-    src/inzaghi/ui/          Textual app (composer.py is the inline draft box)
+    src/inzaghi/ui/          Textual app (composer.py is the inline draft box,
+                             preview.py the reader's bottom pane for a
+                             delivered text file, mounting.py guards the
+                             timed refreshes)
 
 Installed as two console scripts, `inzaghi` and the `inz` alias, both pointing
 at `cli:main`; `cli._prog()` reports whichever name was typed.
@@ -41,6 +46,11 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
 
 - Parsers degrade to `None`; a session that drifts from the format makes one
   widget go quiet rather than crashing the app.
+- Every front-matter key the contract advertises has to be *read* somewhere.
+  `ts` on `STATUS.md` and `HEARTBEAT.md` is the time of that update, not only
+  an event's timestamp: those files are rewritten whole, so it is the same
+  fact. A documented key the parser ignores is worse than one nobody
+  documented -- the session did as it was told and still went unread.
 - Every write into a channel goes through `compose._atomic_write`.
 - Nothing that touches a channel's volume runs on the UI thread -- scanning,
   deciding an absence, sending, deleting conflicts. That volume belongs to a
@@ -53,9 +63,35 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   `absence_is_real` will vouch for. Never per file -- a notification missing
   from one scan of a synced folder is late at least as often as it is gone.
 - `check_action` returning `False` hides a binding; `None` only dims it.
+- A timed refresh -- the poll, the one-second tick -- can land before the
+  widgets it writes into exist, or after they have gone: a dozen channels take
+  longer than a second to mount, and removing a tab frees a pane's children
+  before the pane. Guard every one with `ui.mounting.composed`, in the app as
+  well as in each pane; do not query and hope.
+- An attachment exists only because a notification references it; a bare file
+  in `notifications/attachments/` is invisible on purpose. Resolution happens
+  per scan, never in the `Doc` cache: the prose does not change when the
+  payload lands. A referenced file that is absent is `syncing`, never missing.
+- `attach.READABLE` types (`.md`, `.txt`) are rendered in `ui/preview.py`, the
+  resizable pane along the bottom of the reader, which an opened file gets
+  three quarters of; only `attach.VIEWABLE` types are handed to the system
+  viewer, and everything else gets its folder revealed. Both are whitelists so
+  that a type nobody considered lands on the safe side -- a channel is written
+  by an unattended session. `read_text` re-validates the path it was given for
+  the same reason `remove_conflicts` does: the snapshot is a poll old.
+- Every `Markdown` widget is constructed `open_links=False`. Left on, the
+  widget answers a clicked link itself by calling `app.open_url` -- the
+  browser, or `xdg-open` -- and it does that before the click bubbles this
+  far, so the whitelist above never gets asked. A test posts `LinkClicked` at
+  the widget, not at the pane, because posting it at the pane skips the
+  handler that used to be wrong.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by
   option id, not index: the list also holds separators and the divider.
+- The reader is refreshed on every poll regardless, because the selected
+  entry's *contents* can change while its row does not: a rewritten status
+  file, or an attachment that has finished syncing. `_show` compares before it
+  writes, so a poll that found nothing new costs nothing.
 - The skill's `reference/channel-README.md` is generated from
   `protocol.CHANNEL_README`; a test guards the drift, `inz skill sync` fixes it.
 - `uv run --with pytest pytest -q` to run the suite.

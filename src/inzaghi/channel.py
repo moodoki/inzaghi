@@ -5,6 +5,7 @@ A channel is one folder shared with one unattended session:
     <root>/
       README.md            the contract
       notifications/       session -> you   (singletons + an append-only log)
+        attachments/       files a notification delivers, never read on their own
       inbox/               you -> session   (moved to inbox/done/ once read)
 
 Scanning is deliberately dumb and repeatable: no watcher state, no incremental
@@ -22,10 +23,20 @@ from pathlib import Path
 
 from collections.abc import Iterable
 
-from . import parse
-from .model import DEFAULT_GRACE, Doc, Event, Heartbeat, Snapshot, Status, Thread
+from . import attach, parse
+from .model import (
+    DEFAULT_GRACE,
+    Attachment,
+    Doc,
+    Event,
+    Heartbeat,
+    Snapshot,
+    Status,
+    Thread,
+)
 
 NOTIFICATIONS = "notifications"
+ATTACHMENTS = attach.ATTACHMENTS
 INBOX = "inbox"
 DONE = "done"
 
@@ -81,6 +92,10 @@ class Channel:
         return self.root / NOTIFICATIONS
 
     @property
+    def attachments_dir(self) -> Path:
+        return self.notifications_dir / ATTACHMENTS
+
+    @property
     def inbox_dir(self) -> Path:
         return self.root / INBOX
 
@@ -128,6 +143,17 @@ class Channel:
         if readme is not None:
             pinned.setdefault("README.md", readme)
 
+        # Resolved here rather than inside ``_doc``, which caches: a
+        # notification does not change when the file it announced finally
+        # finishes syncing, so the answer cannot be cached with the parse.
+        # Notifications only -- an attachment is something the session
+        # delivers, and the folder it delivers into is its own.
+        attachments: dict[Path, tuple[Attachment, ...]] = {}
+        for doc in (*pinned.values(), *(event.doc for event in events)):
+            found = attach.resolve(self.attachments_dir, doc)
+            if found:
+                attachments[doc.path] = found
+
         outbound = self._scan_outbound(conflicts, problems)
         events.sort(key=lambda e: e.ts, reverse=True)
         outbound.sort(key=lambda e: e.ts, reverse=True)
@@ -143,6 +169,7 @@ class Channel:
             threads=_weave(outbound, events),
             conflicts=conflicts,
             problems=problems,
+            attachments=attachments,
             grace=self.grace,
         )
 

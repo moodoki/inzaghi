@@ -118,11 +118,70 @@ Composer {
     background: $primary-darken-2;
 }
 
-#reader {
+#reader-column {
     width: 1fr;
     height: 1fr;
+}
+
+#reader {
+    width: 1fr;
+    /* Never squeezed away entirely: the strip and an opened file are both
+       sized as shares of this column, and between them they can ask for more
+       than there is. Whichever is at the bottom is clipped instead, which
+       leaves a key to press; prose that has vanished leaves nothing. */
+    height: 1fr;
+    min-height: 4;
     padding: 0 2;
     scrollbar-size-vertical: 1;
+}
+
+/* Delivered files, listed under the document that announced them. Sized to
+   its contents so prose keeps the room when there are none -- and it is
+   hidden outright in that case. */
+#attachments {
+    height: auto;
+    max-height: 40%;
+    border: none;
+    border-top: solid $panel;
+    padding: 0 1;
+    background: $surface;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#attachments > .option-list--option-highlighted {
+    background: $primary-darken-2;
+}
+
+/* A delivered text file, rendered in place rather than launched. Takes three
+   quarters of the reader, since opening a file is asking to read it, and is
+   dragged or keyed from there; the height is set inline by ui/preview.py, so
+   this is only where it begins. */
+#preview {
+    height: 75%;
+    min-height: 4;
+    background: $surface;
+}
+
+/* Two rows, not one: the border is inside the height, and the row it leaves
+   is the label saying which file this is and how to move or close it. */
+#preview-grip {
+    height: 2;
+    padding: 0 1;
+    border-top: solid $primary;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#preview-body {
+    height: 1fr;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#preview-text {
+    width: 1fr;
+    height: auto;
 }
 
 /* -- modals ------------------------------------------------------------ */

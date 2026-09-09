@@ -27,7 +27,7 @@ async def open_channel(app, pilot):
 
 
 def select(app, pane, key: str):
-    timeline = app.screen.query_one(OptionList)
+    timeline = app.screen.query_one("#timeline", OptionList)
     timeline.highlighted = timeline.get_option_index(key)
     return timeline
 
@@ -77,7 +77,7 @@ async def test_labels_still_refresh_while_the_cursor_stays(reading):
     async with app.run_test() as pilot:
         pane = await open_channel(app, pilot)
         snapshot = app.snapshots[pane.channel.key]
-        timeline = app.screen.query_one(OptionList)
+        timeline = app.screen.query_one("#timeline", OptionList)
         prompts = lambda: [
             str(timeline.get_option_at_index(i).prompt) for i in range(timeline.option_count)
         ]
@@ -108,7 +108,7 @@ async def test_a_new_entry_arriving_does_not_steal_the_cursor(reading, channel_r
         await settle(app, pilot)
 
         assert pane._selected == oldest
-        timeline = app.screen.query_one(OptionList)
+        timeline = app.screen.query_one("#timeline", OptionList)
         assert timeline.highlighted == timeline.get_option_index(oldest)
 
 

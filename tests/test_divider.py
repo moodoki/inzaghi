@@ -79,8 +79,8 @@ async def test_the_divider_appears_between_new_and_seen(channel_root, tmp_path):
         index, count = pane._divider
         assert count == 1
         assert pane._rows[index].kind == "error"
-        labels = [str(app.screen.query_one(OptionList).get_option_at_index(i).prompt)
-                  for i in range(app.screen.query_one(OptionList).option_count)]
+        labels = [str(app.screen.query_one("#timeline", OptionList).get_option_at_index(i).prompt)
+                  for i in range(app.screen.query_one("#timeline", OptionList).option_count)]
         assert any("1 new above" in label for label in labels)
 
 

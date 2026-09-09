@@ -11,6 +11,12 @@ from . import parse
 
 Health = Literal["fresh", "late", "stale", "unknown"]
 Direction = Literal["in", "out"]
+#: Whether a delivered file has arrived yet, or was refused on sight.
+Arrival = Literal["here", "syncing", "refused"]
+#: What showing one to a person means: render it in the reader ourselves,
+#: hand it to the desktop, or only point a file manager at the folder it
+#: sits in.
+Disposition = Literal["read", "view", "reveal"]
 
 # How far past its own deadline a session must drift before "late" becomes
 # "probably dead".  Two missed windows: one can be a slow job, two is a pattern.
@@ -53,6 +59,43 @@ class Doc:
 
 
 @dataclass(frozen=True, slots=True)
+class Attachment:
+    """A file a notification delivered, and whether it is here yet.
+
+    Resolved fresh on every scan rather than cached with the document that
+    names it: the prose does not change when the payload finally lands.
+    """
+
+    #: As the notification wrote it, relative to the attachments folder.
+    name: str
+    #: Where it belongs in the channel.  Meaningless when ``refused``.
+    path: Path
+    #: The session's own description of the file, if it gave one.
+    note: str = ""
+    arrival: Arrival = "syncing"
+    disposition: Disposition = "reveal"
+    #: Bytes, once there are any to count.
+    size: int | None = None
+    #: Last-modified time, once there is a file to ask.  Carried so that a
+    #: payload rewritten while it is being read is noticed by the scan that
+    #: everything else here is noticed by: the tuple simply stops comparing
+    #: equal, the same way a size filling in does.
+    mtime: float | None = None
+    #: Why it was refused, in the words shown to the person reading.
+    problem: str = ""
+
+    @property
+    def openable(self) -> bool:
+        """Only a file that is actually here can be shown at all."""
+        return self.arrival == "here"
+
+    @property
+    def readable(self) -> bool:
+        """Whether showing it means rendering it in the reader ourselves."""
+        return self.arrival == "here" and self.disposition == "read"
+
+
+@dataclass(frozen=True, slots=True)
 class Heartbeat:
     """Liveness: when the session last spoke and when it promised to speak next."""
 
@@ -64,7 +107,14 @@ class Heartbeat:
     @classmethod
     def from_doc(cls, doc: Doc) -> "Heartbeat":
         bullets = parse.parse_kv_bullets(doc.body)
-        updated = _first_ts(doc.meta.get("updated"), bullets.get("updated"))
+        # ``ts`` counts as the update time. It is one of the four front-matter
+        # keys the contract advertises, and on a file that is overwritten at
+        # every wakeup "when this was written" is the same fact as "when this
+        # was last updated" -- a session that filled it in was following the
+        # contract, and was being read as though it had never said.
+        updated = _first_ts(
+            doc.meta.get("updated"), doc.meta.get("ts"), bullets.get("updated")
+        )
         next_by = _first_ts(
             doc.meta.get("next_by"),
             *(v for k, v in bullets.items() if "next update" in k or k == "next"),
@@ -115,7 +165,11 @@ class Status:
 
     @classmethod
     def from_doc(cls, doc: Doc) -> "Status":
-        updated = _first_ts(doc.meta.get("updated")) or parse.parse_timestamp(doc.body[:400])
+        # ``ts`` for the same reason as on a heartbeat: this file is rewritten
+        # whole at every wakeup, so the time it carries is the time it holds.
+        updated = _first_ts(doc.meta.get("updated"), doc.meta.get("ts")) or parse.parse_timestamp(
+            doc.body[:400]
+        )
         section = parse.find_section(doc.body, r"waiting on you|needs? you|blocked on you")
         waiting = None
         if section is not None:
@@ -215,6 +269,10 @@ class Snapshot:
     threads: list[Thread] = field(default_factory=list)  # outbound, newest first
     conflicts: list[Path] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    #: Files each notification delivers, keyed by the notification's own path.
+    #: Only notifications carry these: a file nobody points at is not a
+    #: delivery, and nothing outside ``notifications/`` may name one.
+    attachments: dict[Path, tuple[Attachment, ...]] = field(default_factory=dict)
     #: Slack allowed past a promised heartbeat before it counts as late.
     grace: timedelta = DEFAULT_GRACE
 

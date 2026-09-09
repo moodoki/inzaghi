@@ -160,7 +160,7 @@ async def test_an_empty_result_does_not_leave_a_stale_selection(channel_root):
         pane = await open_channel(app, pilot)
         await search_for(pilot, "zzzz")
         assert pane._rows == []
-        assert app.screen.query_one(OptionList).option_count == 1  # the "no matches" line
+        assert app.screen.query_one("#timeline", OptionList).option_count == 1  # the "no matches" line
 
 
 async def test_filtering_survives_a_rescan(channel_root):

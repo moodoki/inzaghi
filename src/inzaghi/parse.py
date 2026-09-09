@@ -40,6 +40,19 @@ _CONFLICT_RE = re.compile(
 )
 
 
+# Inline links and images.  ``[label](target)``, plus the bracketed target form
+# Markdown uses for a filename with spaces in it -- which delivered files have.
+_LINK_RE = re.compile(
+    r"(?P<image>!)?\[(?P<label>[^\]\n]*)\]"
+    r"\(\s*(?:<(?P<bracketed>[^>\n]*)>|(?P<bare>[^)\s]+))"
+    r"(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
+)
+# Fenced blocks and inline spans quote commands and file listings, so a link
+# inside one is an example, not a reference.
+_FENCE_RE = re.compile(r"^(?P<fence>```+|~~~+)[^\n]*\n.*?(?:^(?P=fence)[ \t]*$|\Z)", re.M | re.S)
+_SPAN_RE = re.compile(r"`[^`\n]*`")
+
+
 def is_conflict_copy(name: str) -> bool:
     """True for a sync client's leftover duplicate of a real file."""
     return bool(_CONFLICT_RE.search(name))
@@ -159,6 +172,32 @@ def first_heading(text: str) -> str | None:
         if line:
             return None
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class Link:
+    """One inline link or image, exactly as the prose wrote it."""
+
+    label: str
+    target: str
+    image: bool = False
+
+
+def markdown_links(text: str) -> list[Link]:
+    """Every inline link and image in ``text``, code excluded.
+
+    The target is returned undecoded and unresolved: whether it names anything,
+    and whether that thing is allowed, are not questions about prose.
+    """
+    stripped = _SPAN_RE.sub(" ", _FENCE_RE.sub("\n", text))
+    found: list[Link] = []
+    for match in _LINK_RE.finditer(stripped):
+        target = (match["bracketed"] or match["bare"] or "").strip()
+        if target:
+            found.append(
+                Link(label=match["label"].strip(), target=target, image=bool(match["image"]))
+            )
+    return found
 
 
 def parse_kv_bullets(text: str) -> dict[str, str]:
