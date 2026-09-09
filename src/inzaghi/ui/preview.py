@@ -26,6 +26,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Markdown, Static
 
 from .. import attach, fmt
@@ -103,6 +104,14 @@ class Preview(Vertical):
         #: text.  A re-read of the same file leaves the scroll position where
         #: it was; a different file starts at the top.
         self.showing: tuple | None = None
+        #: The text of it, kept rather than dropped after rendering: a search
+        #: in this pane matches against the source it was given, the same way
+        #: a search in the reader matches the document it rendered.
+        self.text = ""
+        #: Whether a search is running in here, which the pane sets.  It
+        #: changes what ``escape`` means: the nearer thing to undo is the
+        #: search, and only once that is gone does the key close the file.
+        self.searching = False
 
     def compose(self) -> ComposeResult:
         yield Grip("", id="preview-grip", markup=True)
@@ -160,7 +169,22 @@ class Preview(Vertical):
         if focus:
             body.focus()
 
+    def searchable(self) -> tuple[str, Widget, str] | None:
+        """What there is to search here: ``(kind, widget, text)``, or None.
+
+        ``kind`` separates the two ways a match can be shown: ``markdown`` is
+        a column of blocks to scroll to, ``text`` is one string we laid out
+        ourselves and can highlight to the character.
+        """
+        if not self.display or self.showing is None:
+            return None
+        markdown = self.query_one("#preview-md", Markdown)
+        if markdown.display:
+            return "markdown", markdown, self.text
+        return "text", self.query_one("#preview-text", Static), self.text
+
     def _write(self, attachment: Attachment, text: str) -> None:
+        self.text = text
         as_markdown = Path(attachment.name).suffix.lower() in AS_MARKDOWN
         markdown = self.query_one("#preview-md", Markdown)
         plain = self.query_one("#preview-text", Static)
@@ -183,6 +207,7 @@ class Preview(Vertical):
         held = self.query_one("#preview-body", VerticalScroll).has_focus
         self.display = False
         self.showing = None
+        self.text = ""
         self.query_one("#preview-md", Markdown).update("")
         self.query_one("#preview-text", Static).update("")
         if held:
@@ -190,6 +215,17 @@ class Preview(Vertical):
 
     def action_close(self) -> None:
         self.close()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Hand ``escape`` back while a search is running in here.
+
+        Refused, the key carries on to the pane, which clears the search. The
+        next press finds no search and closes the file, so one key undoes two
+        things in the order they were done.
+        """
+        if action == "close" and self.searching:
+            return False
+        return True
 
     # -- how big it is ----------------------------------------------------
 

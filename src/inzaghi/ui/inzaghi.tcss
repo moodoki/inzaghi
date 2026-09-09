@@ -184,6 +184,38 @@ Composer {
     height: auto;
 }
 
+/* The find box: one row at the bottom of the column being searched, which is
+   where vim puts it. Hidden until asked for. */
+#find-bar {
+    height: 1;
+    background: $surface;
+}
+
+#find {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0 1;
+    background: $surface;
+}
+
+/* A fixed width, not auto: beside a 1fr input, an auto sibling is sized after
+   the input has already taken the row and ends up off the right edge. Wide
+   enough for "no matches", which is the longest thing it says. */
+#find-count {
+    width: 14;
+    height: 1;
+    padding: 0 1;
+    text-align: right;
+    text-wrap: nowrap;
+}
+
+/* The lit match. A rendered document has no cursor to move through it, so
+   the tint on the block is the cursor. */
+MarkdownBlock.-match {
+    background: $primary-darken-2;
+}
+
 /* -- modals ------------------------------------------------------------ */
 
 ConfirmScreen {

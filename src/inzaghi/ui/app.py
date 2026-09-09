@@ -42,6 +42,16 @@ OVERVIEW_TABLE = "#overview-table"
 #: Which way ``ctrl+w`` and a key means to move the keyboard.
 PANES = {"h": "left", "j": "down", "k": "up", "l": "right"}
 
+#: Every two-key sequence, as {prefix: {second key: what it runs}}.  One table
+#: rather than a chain of conditions, because it is also the answer to "may
+#: this key be taken out of the chain" -- see ``check_action``.
+CHORDS: dict[str, dict[str, str]] = {
+    "g": {"g": "motion('top')", "f": "open_reference"},
+    "window": {key: f"pane('{way}')" for key, way in PANES.items()},
+    "]": {"f": "reference(1)"},
+    "[": {"f": "reference(-1)"},
+}
+
 #: How long a prefix waits for the key that finishes it.  Vim calls this
 #: timeoutlen.  A sequence nobody completed has to expire rather than sit
 #: there waiting to give the next h a meaning it was not typed for.
@@ -56,8 +66,6 @@ class InzaghiApp(App):
         Binding("q", "quit", "Quit"),
         Binding("o", "overview", "Overview"),
         Binding("tab", "next_channel", "Next", show=False),
-        Binding("]", "next_channel", "Next channel", show=False),
-        Binding("[", "prev_channel", "Prev channel", show=False),
         # The arrows step through the tabs from wherever the keyboard is,
         # because the widgets that bind them cannot use them: a vertical-only
         # scroll has no sideways to go, and a row cursor has no column to move
@@ -91,11 +99,17 @@ class InzaghiApp(App):
         # is what lets g, h and l keep their own meanings the rest of the time.
         Binding("g", "prefix('g')", "Top (gg)", show=False),
         Binding("ctrl+w", "prefix('window')", "Pane", show=False),
+        # ] and [ are prefixes now rather than channel keys of their own:
+        # h, l, the arrows and tab all still step the tabs, and ]f is worth
+        # more than a fifth way to do that.
+        Binding("]", "prefix(']')", "Next file", show=False),
+        Binding("[", "prefix('[')", "Prev file", show=False),
         Binding("g", "chord('g')", priority=True, show=False),
         Binding("h", "chord('h')", priority=True, show=False),
         Binding("j", "chord('j')", priority=True, show=False),
         Binding("k", "chord('k')", priority=True, show=False),
         Binding("l", "chord('l')", priority=True, show=False),
+        Binding("f", "chord('f')", priority=True, show=False),
         # Channels are the only horizontal axis here, so h and l are what the
         # arrows are.
         Binding("l", "next_channel", "Next channel", show=False),
@@ -404,16 +418,31 @@ class InzaghiApp(App):
         self._pending = None
         self._pending_timer = None
 
-    def action_chord(self, key: str) -> None:
+    async def action_chord(self, key: str) -> None:
         """The second key of a sequence, once ``check_action`` has allowed it."""
         pending, self._pending = self._pending, None
         if self._pending_timer is not None:
             self._pending_timer.stop()
             self._pending_timer = None
-        if pending == "g" and key == "g":
-            self.action_motion("top")
-        elif pending == "window":
-            self.action_pane(PANES[key])
+        action = CHORDS.get(pending or "", {}).get(key)
+        if action:
+            await self.run_action(action)
+
+    def action_reference(self, step: int) -> None:
+        """``]f`` and ``[f``: through the files the entry on screen delivered."""
+        pane = self._current_pane()
+        if pane is not None:
+            pane.step_reference(step)
+
+    def action_open_reference(self) -> None:
+        """``gf``: vim's go-to-file, on whichever reference is selected."""
+        pane = self._current_pane()
+        if pane is not None:
+            pane.open_reference()
+
+    def _current_pane(self) -> ChannelPane | None:
+        channel = self.current_channel()
+        return self._pane_for(channel.key) if channel else None
 
     def action_pane(self, direction: str) -> None:
         """Move the keyboard one pane over, within the channel on screen.
@@ -422,8 +451,7 @@ class InzaghiApp(App):
         nothing to do -- which is the same answer vim gives for ctrl+w l in a
         window with no split.
         """
-        channel = self.current_channel()
-        pane = self._pane_for(channel.key) if channel else None
+        pane = self._current_pane()
         if pane is not None:
             pane.focus_neighbour(direction)
 
@@ -542,9 +570,7 @@ class InzaghiApp(App):
             # finishes the armed sequence gets through; every other key is
             # refused here and carries on to whatever it usually does.
             key = str(parameters[0]) if parameters else ""
-            if self._pending == "window":
-                return key in PANES
-            return self._pending == "g" and key == "g"
+            return key in CHORDS.get(self._pending or "", {})
         return True
 
     def _conflicts(self) -> list:

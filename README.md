@@ -73,7 +73,9 @@ chart, a tarball of raw output — writes it into `notifications/attachments/`
 and points at it from the notification that explains it, as an ordinary
 Markdown link. The link text becomes the description. Selecting that entry
 lists what it delivered beneath the reader; `v` moves the cursor into the list
-and `enter` shows the file.
+and `enter` shows the file. From the reader, `]f` and `[f` step through the
+references without leaving it — scrolling the prose to where each was written
+— and `gf` opens the one you are on.
 
 Nothing in that folder is read on its own. An attachment exists because a
 notification names it, which is what makes the two interesting states
@@ -136,9 +138,26 @@ removed.
 
 ## Finding things in a long log
 
-`/` searches the channel — titles and whole document bodies, case-insensitively
-— narrowing as you type. Enter hides the box and keeps the search; the query
-stays visible in the filter bar and `/` reopens it with the text still there.
+`/` asks one of two questions, depending on where the keyboard is: *which
+entries mention this*, from the timeline, or *where in this one does it say
+that*, from the reader or an opened file. A phase summary of eighty lines
+mostly wants the second.
+
+From the timeline it searches the channel — titles and whole document bodies,
+case-insensitively — narrowing as you type. Enter hides the box and keeps the
+search; the query stays visible in the filter bar and `/` reopens it with the
+text still there.
+
+From the reader it searches the document, in a one-row box at the foot of the
+column, with the match count beside it. `n` and `N` step through the matches
+and go on working after the box has closed, the way `hlsearch` does; `esc`
+clears the search before it clears anything else. A rendered document is not
+text on screen but a column of blocks, so a match is shown by scrolling to the
+block that holds it and tinting that — the innermost one, so a list item
+lights up rather than the whole list. A delivered `.txt` is laid out by
+Inzaghi itself, so there every match is underlined and the current one
+reversed. The query survives moving to another entry, as vim's does across
+buffers, but nothing jumps until `n` asks it to.
 
 `f` cycles the kind filter (`F` goes back), and the two compose: `milestone` +
 "gate" asks for milestones mentioning gate. The bar doubles as a histogram of
@@ -162,8 +181,10 @@ window somebody leaves open beside their editor all day:
 | `j` `k` | down and up, in whichever pane holds the keyboard: a list moves its cursor, a document scrolls |
 | `gg` `G` | the top and the bottom of it |
 | `ctrl+d` `ctrl+u` | half a screen either way |
-| `h` `l` | the previous and next channel — the only horizontal axis here — same as `←` `→`, `[` `]` and `tab` |
+| `h` `l` | the previous and next channel — the only horizontal axis here — same as `←` `→` and `tab` |
 | `ctrl+w` `h` `j` `k` `l` | the pane to the left, below, above, to the right |
+| `/` `n` `N` | search, and step the matches — the channel or the document, see below |
+| `]f` `[f` `gf` | the next and previous file this entry delivered, and open it |
 | `i` | write a message, as in insert |
 | `;` | the command palette |
 

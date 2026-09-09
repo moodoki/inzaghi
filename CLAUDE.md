@@ -36,8 +36,9 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/skills/      the session-side skill, shipped as package data
     src/inzaghi/ui/          Textual app (composer.py is the inline draft box,
                              preview.py the reader's bottom pane for a
-                             delivered text file, mounting.py guards the
-                             timed refreshes)
+                             delivered text file, vim.py what a motion means
+                             to the focused pane, find.py the in-document
+                             search, mounting.py guards the timed refreshes)
 
 Installed as two console scripts, `inzaghi` and the `inz` alias, both pointing
 at `cli:main`; `cli._prog()` reports whichever name was typed.
@@ -93,6 +94,18 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   far, so the whitelist above never gets asked. A test posts `LinkClicked` at
   the widget, not at the pane, because posting it at the pane skips the
   handler that used to be wrong.
+- Two searches share `/`, and which one runs is decided by focus alone:
+  `ChannelPane._reading()` names the two panes that hold a document, and
+  everywhere else `/` is the channel filter it always was. They keep separate
+  state -- `self.filter` against the rows, `self._find` against the text -- so
+  `esc` can undo the nearer one first.
+- A match in the reader is shown by tinting the `MarkdownBlock` that holds it,
+  because a rendered document is a column of widgets and not text on screen:
+  `find.block_for` picks the innermost block whose `source_range` covers the
+  line. A delivered `.txt` is laid out here, so that one is highlighted to the
+  character with `Content` spans. Matching runs on the *source* and offsets
+  come from a regex over the original string -- casefolding is not
+  length-preserving, and a shifted offset lights the wrong words.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by
   option id, not index: the list also holds separators and the divider.
