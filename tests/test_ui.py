@@ -338,6 +338,71 @@ async def test_cleaning_conflicts_never_blocks_the_ui(channel_root):
     assert not conflict.exists()
 
 
+async def test_scanning_never_blocks_the_ui(channel_root):
+    """And happens on the pool set aside for calls that wait on a volume."""
+    app = make_app(channel_root)
+    threads: set[str] = set()
+    real_scan = channel_module.Channel.scan
+
+    def watched(self, now=None):
+        threads.add(threading.current_thread().name)
+        return real_scan(self, now=now)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        with mock.patch.object(channel_module.Channel, "scan", watched):
+            app.rescan()
+            await settle(app, pilot)
+
+    assert threads, "nothing was scanned"
+    assert threading.current_thread().name not in threads
+    assert all(name.startswith("inzaghi-volume") for name in threads), threads
+
+
+# -- one scan at a time ----------------------------------------------------
+#
+# A read of a channel's volume cannot be cancelled once it has begun, only
+# waited for. So a poll that comes round while the last scan is still out
+# there must not start a second one: the threads would accumulate, one every
+# poll, for as long as the volume stayed quiet -- and out of a pool that
+# sending, deleting and opening are drawing on too.
+
+
+async def test_a_poll_never_overtakes_the_scan_before_it(channel_root):
+    config = Config(
+        channels=[ChannelSpec(path=channel_root, name=channel_root.name)],
+        poll_seconds=60.0,  # only the scans this test asks for itself
+    )
+    app = InzaghiApp(config)
+    held = threading.Event()
+    scans: list[str] = []
+    real_scan = channel_module.Channel.scan
+
+    def watched(self, now=None):
+        scans.append(self.name)
+        held.wait(10)
+        return real_scan(self, now=now)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        with mock.patch.object(channel_module.Channel, "scan", watched):
+            app.rescan()  # goes out, and blocks where the volume would block
+            await pilot.pause()
+            app.rescan()  # and these three wait for it rather than pile up
+            app.rescan()
+            app.rescan()
+            await pilot.pause()
+            assert len(scans) == 1
+
+            held.set()
+            await settle(app, pilot)
+            await settle(app, pilot)
+
+    # Remembered, not dropped: the rescan that follows a send has to see the
+    # message it sent. However many asked while it was out, one scan follows.
+    assert len(scans) == 2
+
+
 # -- discovery while running ---------------------------------------------
 
 

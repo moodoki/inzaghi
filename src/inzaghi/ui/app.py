@@ -3,18 +3,20 @@
 Structure: an overview tab, then one tab per channel.  A background thread
 re-reads the folders on a timer -- a sync client's writes arrive without any
 local filesystem event, and the volume can block, so scanning never runs on the
-UI thread.  A separate one-second tick refreshes only the countdowns.
+UI thread, and never more than one scan at a time.  A separate one-second tick
+refreshes only the countdowns.
 """
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from itertools import count
 from pathlib import Path
 
 from textual import on, work
-from textual.worker import get_current_worker
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.timer import Timer
@@ -51,6 +53,14 @@ CHORDS: dict[str, dict[str, str]] = {
     "]": {"f": "reference(1)"},
     "[": {"f": "reference(-1)"},
 }
+
+#: Threads set aside for the calls that wait on a channel's volume: the scan
+#: and the discovery sweep.  They are kept apart from the pool Textual hands
+#: every other worker so that a volume which has stopped answering cannot take
+#: sending, deleting and opening down with it -- and bounded so that a wedged
+#: read costs one thread rather than a new one every poll.  One in flight of
+#: each, plus room for the threads a cancelled worker leaves behind.
+VOLUME_THREADS = 4
 
 #: How long a prefix waits for the key that finishes it.  Vim calls this
 #: timeoutlen.  A sequence nobody completed has to expire rather than sit
@@ -128,6 +138,19 @@ class InzaghiApp(App):
         self._pane_counter = count()
         self._known_events: dict[str, set[str]] = {}
         self._known_health: dict[str, str] = {}
+        #: Where a read of a channel's volume happens.  See ``VOLUME_THREADS``.
+        self._volume = ThreadPoolExecutor(
+            max_workers=VOLUME_THREADS, thread_name_prefix="inzaghi-volume"
+        )
+        #: Whether a scan or a sweep is out there, and whether one was asked
+        #: for while it was.  A blocked read cannot be cancelled, only waited
+        #: for, so the only way not to pile them up is not to start them.
+        self._scanning = False
+        self._scan_again = False
+        self._discovering = False
+        #: Set once the app is going away, so that a timer which fires during
+        #: teardown does not hand work to a pool that has been shut down.
+        self._closing = False
         #: The half-typed key sequence, if there is one, and the timer that
         #: gives up on it.
         self._pending: str | None = None
@@ -159,7 +182,11 @@ class InzaghiApp(App):
         return pane_id
 
     def on_unmount(self) -> None:
+        self._closing = True
         self.state.save()
+        # Without waiting: a read that is still out there is out there on a
+        # volume that has stopped answering, and quitting must not wait on it.
+        self._volume.shutdown(wait=False, cancel_futures=True)
 
     # -- scanning ---------------------------------------------------------
 
@@ -167,51 +194,103 @@ class InzaghiApp(App):
         """Re-read the config, look for new channels, and rescan every folder."""
         self.rediscover()
 
-    @work(thread=True, exclusive=True, group="scan")
     def rescan(self) -> None:
-        """Re-read every channel off the UI thread.
+        """Ask for a re-read of every channel, unless one is already out.
 
-        Checks for cancellation between channels so that quitting does not wait
-        for a scan of folders nobody is going to look at. A read already blocked
-        inside the filesystem cannot be interrupted, so exit can still cost the
-        tail of one slow channel -- but not the whole sweep, and the result is
-        never posted back to a screen that has gone away.
+        A scan reads a volume a sync client owns, and such a read answers when
+        that client feels like it. Textual can cancel the worker waiting on
+        one; nothing can cancel the read itself, so the thread stays where it
+        is. A poll firing every couple of seconds at a volume that has gone
+        quiet therefore does not queue scans, it accumulates threads -- and
+        they come from the pool that sending, deleting and opening are drawing
+        on, so once it fills, everything that touches a disk stops until the
+        app is restarted.
+
+        So: one scan in flight, ever. A request that arrives while one is out
+        is remembered rather than dropped -- the rescan after a send has to see
+        the message it sent -- and runs when the scan comes back.
         """
-        worker = get_current_worker()
+        if self._closing:
+            return
+        if self._scanning:
+            self._scan_again = True
+            return
+        self._scanning = True
+        self._scan()
+
+    @work(group="scan")
+    async def _scan(self) -> None:
+        """Read every channel on the volume pool, then hand the UI the result.
+
+        The awaited part is the only part that blocks; everything either side
+        of it runs on the UI thread, which is what lets the result be applied
+        directly rather than posted back, and what makes cancelling this worker
+        at exit enough to stop it reaching a screen that has gone away.
+        """
         now = datetime.now().astimezone()
+        loop = asyncio.get_running_loop()
+        try:
+            scanned = await loop.run_in_executor(self._volume, self._read_channels, now)
+        finally:
+            # A scan that was cancelled, or that failed, must not leave the
+            # door shut behind it. The thread it left may still be blocked --
+            # the pool is bounded for exactly that -- but the next poll is
+            # allowed to try.
+            self._scanning = False
+        self._apply(scanned, now)
+        if self._scan_again:
+            self._scan_again = False
+            self.rescan()
+
+    def _read_channels(self, now: datetime) -> dict[str, Snapshot]:
+        """Every channel, read on a volume thread. Never on the UI's."""
         scanned: dict[str, Snapshot] = {}
-        for channel in self.channels:
-            if worker.is_cancelled:
-                return
+        for channel in list(self.channels):
             try:
                 scanned[channel.key] = channel.scan(now=now)
             except OSError:
                 continue  # a mount that went away; keep the last good snapshot
-        if worker.is_cancelled:
-            return
-        self.call_from_thread(self._apply, scanned, now)
+        return scanned
 
-    @work(thread=True, exclusive=True, group="discover")
     def rediscover(self) -> None:
-        """Look for channels that have appeared or gone since the last pass."""
-        worker = get_current_worker()
+        """Look for channels that have appeared or gone since the last pass.
+
+        Guarded like the scan above, and for the same reason: the sweep stats
+        folders on the volume that has stopped answering.
+        """
+        if self._closing or self._discovering:
+            return
+        self._discovering = True
+        self._discover()
+
+    @work(group="discover")
+    async def _discover(self) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            config, found, gone = await loop.run_in_executor(
+                self._volume, self._read_config
+            )
+        finally:
+            self._discovering = False
+        await self._sync_channels(config, found, gone)
+
+    def _read_config(self) -> tuple[Config, list[Channel], set[str]]:
+        """Re-read the config and decide what has appeared or gone.
+
+        Believing an absence means stat-ing the channel's own folder -- and a
+        channel drops out of discovery precisely when its volume has stopped
+        answering, so that is the one call most likely to block. Asked here, on
+        a volume thread, for the same reason the scan is here.
+        """
         config = self.config.reload()
         found = config.discover()
-        if worker.is_cancelled:
-            return
-        # Believing an absence means stat-ing the channel's own folder -- and a
-        # channel drops out of discovery precisely when its volume has stopped
-        # answering, so that is the one call most likely to block. Ask it here,
-        # beside the scan, for the same reason the scan is here.
         present = {channel.key for channel in found}
         gone = {
             channel.key
             for channel in list(self.channels)
             if channel.key not in present and absence_is_real(channel.root)
         }
-        if worker.is_cancelled:
-            return
-        self.call_from_thread(self._sync_channels, config, found, gone)
+        return config, found, gone
 
     async def _sync_channels(
         self, config: Config, found: list[Channel], gone: set[str]
