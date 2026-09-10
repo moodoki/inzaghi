@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import timedelta
 from pathlib import Path
 
@@ -57,6 +57,13 @@ class Alerts:
     waiting: bool = True
     bell: bool = True
     banner: bool = False  # macOS notification centre
+
+
+#: Alert names this build knows. One it does not is a config written for a
+#: newer Inzaghi -- dropped rather than raised, because the same file is read
+#: by whatever versions are installed across a person's machines, and a key
+#: from the future must not stop an older one from starting.
+_ALERT_KEYS = frozenset(f.name for f in fields(Alerts))
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +145,13 @@ class Config:
             heartbeat_grace_seconds=float(
                 raw.get("heartbeat_grace_seconds", DEFAULT_HEARTBEAT_GRACE)
             ),
-            alerts=Alerts(**{k: bool(v) for k, v in raw.get("alerts", {}).items()}),
+            alerts=Alerts(
+                **{
+                    key: bool(value)
+                    for key, value in raw.get("alerts", {}).items()
+                    if key in _ALERT_KEYS
+                }
+            ),
             source=path,
             loaded=True,
         )
