@@ -34,6 +34,7 @@ import hashlib
 import subprocess
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,7 +79,7 @@ class Result:
     commands: list[list[str]] = field(default_factory=list)
     #: Messages whose local copy was retired, by filename.
     retired: list[str] = field(default_factory=list)
-    #: The marker touched on success, if the channel names one.
+    #: The marker written on success, if the channel names one.
     marked: Path | None = None
 
 
@@ -92,10 +93,9 @@ def sync(
 ) -> Result:
     """Run one full cycle for ``channel``.
 
-    The marker is touched only at the end, so its mtime means "a whole cycle
-    got through" rather than "something was attempted". That is the whole
-    basis on which the watcher is later allowed to blame the link instead of
-    the session.
+    The marker is written only at the end, so it means "a whole cycle got
+    through" rather than "something was attempted". That is the whole basis on
+    which a client is later allowed to blame the link instead of the session.
     """
     remote = (remote if remote is not None else channel.remote).rstrip("/")
     if not remote:
@@ -105,6 +105,15 @@ def sync(
         raise ReadOnlyChannel(f"{channel.name} is configured read-only; refusing to sync")
 
     marker = marker if marker is not None else channel.sync_marker
+    if marker is not None and _inside_notifications(channel, marker):
+        # The notifications pull owns that directory with --delete, so a
+        # marker there is deleted on every cycle and recreated at the end of
+        # the ones that get far enough -- which reads as "fresh" forever and
+        # can never report a problem.
+        raise ValueError(
+            f"{channel.name}: sync_marker cannot live in notifications/;"
+            " the pull deletes anything there that the session does not have"
+        )
     runner = run or _run
     result = Result()
 
@@ -127,9 +136,16 @@ def sync(
              f"{channel.inbox_dir}/", f"{remote}/inbox/")
 
         if marker is not None and not dry_run:
-            _touch(marker)
+            _mark(marker)
             result.marked = marker
     return result
+
+
+def _inside_notifications(channel: Channel, marker: Path) -> bool:
+    try:
+        return marker.resolve().is_relative_to(channel.notifications_dir.resolve())
+    except OSError:  # pragma: no cover -- an unreadable path is not our call
+        return False
 
 
 def retire(channel: Channel) -> list[str]:
@@ -200,9 +216,17 @@ def _run(command: Sequence[str]) -> tuple[int, str]:
     return done.returncode, (done.stderr or "").strip()
 
 
-def _touch(path: Path) -> None:
+def _mark(path: Path) -> None:
+    """Record the moment a whole cycle got through.
+
+    The time goes *in* the file rather than only on it, so that a client
+    reading this marker never has to trust a stat -- see ``Transport.read``.
+    A torn write is harmless: a truncated stamp does not parse, and the read
+    falls back to the mtime, which is fresh for the same reason.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch()
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    path.write_text(f"{stamp}\n", encoding="utf-8")
 
 
 @contextmanager

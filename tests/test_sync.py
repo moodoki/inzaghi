@@ -248,6 +248,27 @@ def test_a_missing_rsync_is_reported_rather_than_raised_raw(channel, monkeypatch
 # -- refusals ---------------------------------------------------------------
 
 
+def test_the_marker_may_not_live_where_the_pull_rules(channel):
+    """notifications/ is owned by the --delete pull, so a marker there is
+    deleted every cycle and recreated at the end of the ones that get far
+    enough -- reading as fresh forever and never able to report a problem."""
+    inside = channel.notifications_dir / ".synced"
+    with pytest.raises(ValueError, match="cannot live in notifications"):
+        transport.sync(channel, marker=inside)
+
+
+def test_the_marker_records_a_time_a_client_can_read_back(channel):
+    """Written into the file, so no client has to trust a stat for it."""
+    from inzaghi.model import Transport
+
+    before = datetime.now().astimezone()
+    transport.sync(channel)
+    read_back = Transport.read(channel.sync_marker, timedelta(seconds=300))
+    assert read_back.synced_at is not None
+    assert read_back.synced_at >= before.replace(microsecond=0)
+    assert read_back.health(datetime.now().astimezone()) == "fresh"
+
+
 def test_a_read_only_channel_refuses_to_sync(channel):
     """Pulling writes into the folder, and read-only means untouched."""
     channel.read_only = True

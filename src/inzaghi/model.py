@@ -131,7 +131,31 @@ class Transport:
 
     @classmethod
     def read(cls, path: Path, interval: timedelta | None = None) -> "Transport":
-        """Stat the marker.  Touches the filesystem; belongs in the scan."""
+        """Read the marker: the timestamp inside it, or its mtime failing that.
+
+        *Opened*, not stat-ed, and that is the point. A marker is a file
+        overwritten in place, and on a File Provider mount -- iCloud, Dropbox,
+        Nextcloud on macOS -- a stat describes the placeholder the provider
+        last wrote down rather than the file. It is the same trap ``_doc``
+        sidesteps by reading every singleton on every scan: opening is what
+        makes the provider answer, and a file nobody opens is never fetched.
+
+        Writing the time inside rather than relying on the mtime also survives
+        a transport that rewrites mtimes on the way. An empty marker -- one a
+        plain ``touch`` left -- still works, on its mtime.
+
+        Touches the filesystem, so it belongs in the scan with everything else
+        that can wait on a volume.
+        """
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                # Capped: this is a timestamp, and the file is whatever
+                # somebody's script actually wrote there.
+                stamped = parse.parse_timestamp(handle.read(200))
+        except OSError:
+            return cls(path=path, synced_at=None, interval=interval)
+        if stamped is not None:
+            return cls(path=path, synced_at=stamped, interval=interval)
         try:
             synced_at = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
         except OSError:

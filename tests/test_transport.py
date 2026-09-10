@@ -147,6 +147,63 @@ def test_the_marker_is_re_read_every_scan(channel_root, marker):
     assert channel.scan(now=now).health(now) == "late"
 
 
+# -- reading the marker ---------------------------------------------------
+
+
+def test_the_timestamp_inside_the_marker_beats_the_mtime(marker):
+    """A stat cannot be trusted for a file that is overwritten in place.
+
+    On a File Provider mount it describes the placeholder the provider last
+    wrote down, so the marker carries the time in its contents and is opened
+    rather than stat-ed. Here the mtime says two days ago and the contents say
+    now; the contents win.
+    """
+    now = at(minutes=10)
+    touched(marker, now - timedelta(days=2))
+    marker.write_text(f"{now.isoformat(timespec='seconds')}\n", encoding="utf-8")
+    os.utime(marker, ((now - timedelta(days=2)).timestamp(),) * 2)
+
+    transport = Transport.read(marker, INTERVAL)
+    assert transport.synced_at == now
+    assert transport.health(now) == "fresh"
+
+
+def test_an_empty_marker_still_works_on_its_mtime(marker):
+    """What a plain ``touch`` leaves, and what older scripts already write."""
+    now = at(minutes=10)
+    touched(marker, now - timedelta(seconds=5))
+    assert marker.read_text() == ""
+    assert Transport.read(marker, INTERVAL).health(now) == "fresh"
+
+
+def test_contents_that_are_not_a_timestamp_fall_back_to_the_mtime(marker):
+    now = at(minutes=10)
+    touched(marker, now - timedelta(seconds=5))
+    marker.write_text("ok\n", encoding="utf-8")
+    os.utime(marker, ((now - timedelta(seconds=5)).timestamp(),) * 2)
+    assert Transport.read(marker, INTERVAL).health(now) == "fresh"
+
+
+def test_a_marker_that_is_not_there_reports_nothing(tmp_path):
+    assert Transport.read(tmp_path / "never", INTERVAL).synced_at is None
+
+
+def test_only_the_head_of_the_marker_is_read(marker):
+    """It is a timestamp, and the file is whatever somebody's script wrote.
+
+    A stamp past the cap is simply not found, and the read falls back to the
+    mtime -- which is the same answer as for any file with no stamp in it.
+    """
+    buried = at(minutes=10)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("#" * 5000 + f"\n{buried.isoformat()}\n", encoding="utf-8")
+    mtime = datetime.fromtimestamp(marker.stat().st_mtime).astimezone()
+
+    found = Transport.read(marker, INTERVAL).synced_at
+    assert found != buried
+    assert found == mtime
+
+
 # -- configuration --------------------------------------------------------
 
 

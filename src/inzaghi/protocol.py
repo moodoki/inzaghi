@@ -132,15 +132,16 @@ whole every time.
 
 ## Housekeeping
 
-How this folder reaches the other end is not part of the contract — a sync
-client (Dropbox, iCloud, Syncthing) and rsync over ssh both satisfy it, and
-nothing above changes between them. One chore does depend on which:
+How this folder reaches the other end is not part of the contract. A
+filesystem the watcher can read directly, a sync client (Dropbox, iCloud,
+Syncthing), rsync over ssh on a timer — all satisfy it, and nothing above
+changes between them. One chore depends on which:
 
 A sync client that cannot merge an overwritten file leaves a
 `… (conflicted copy …)` duplicate beside it. Those are copies of the
-session's own files, and the session deletes them at wakeups. Under rsync
-there are none to find, and the step is a no-op rather than a mistake — so do
-it either way, and do not read an empty result as a sign anything is wrong.
+session's own files, and the session deletes them at wakeups. Nothing else
+produces them, so on any other transport the step finds nothing — do it
+anyway, and do not read an empty result as a sign that something is wrong.
 """
 
 

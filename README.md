@@ -139,11 +139,16 @@ removed.
 ## Moving a channel yourself
 
 A channel is a folder with a contract, and nothing in the contract says how
-the folder gets from one machine to the other. A sync client is the
-convenient answer and remains the default one — it is store-and-forward, so
-neither end has to be awake when the other writes. `inz sync` is the
-alternative for when you would rather not put the channel through a third
-party, or there is no sync client on the box:
+the folder gets from one machine to the other. Three ways work, and none of
+them is a fallback for the others:
+
+1. **A filesystem both ends can reach** — the session writes, this client
+   reads, and there is no transport to go wrong.
+2. **A sync client** — Dropbox, iCloud, Syncthing. Store-and-forward, so
+   neither end has to be awake when the other writes, which is what makes it
+   the convenient default.
+3. **rsync over ssh**, below, for when you would rather not put the channel
+   through a third party, or there is no sync client on the box:
 
 ```toml
 [[channels]]
@@ -213,11 +218,16 @@ refuses to sync at all, since pulling writes into the folder.
 
 ## When the link is the problem, not the session
 
-A silent folder means a dead session only if the folder is still arriving. On
-a sync client that is usually safe to assume; on rsync over ssh it is not — an
-unreachable host, or a laptop that slept through the last ten cron ticks,
-looks exactly like a session that died, because in both cases nothing new
-turns up.
+A silent folder means a dead session only if the folder is still arriving.
+When the session writes straight into a filesystem this client can read, that
+is a given. On a sync client it is usually safe to assume. On rsync over ssh
+it is not — an unreachable host, or a laptop that slept through the last ten
+cron ticks, looks exactly like a session that died, because in both cases
+nothing new turns up.
+
+The marker below is worth setting for the third of those and pointless for the
+first: with no transport in the way, there is nothing that could stop
+arriving.
 
 Point a channel at a marker file and Inzaghi can tell them apart:
 
@@ -228,11 +238,24 @@ sync_marker = "~/.local/state/inzaghi/northwind.synced"
 sync_interval_seconds = 300
 ```
 
-Whatever moves the folder touches that file on success — `inz sync` does, and
-so can a script of your own. Its mtime is the last time this end heard
-anything at all, which is the one fact the channel cannot report about itself.
-The path is not special: put it outside the channel when this end pulls, or
-inside the channel when the far end pushes it along with everything else.
+Whatever moves the folder writes that file on success — `inz sync` does, and
+so can a script of your own, with `date -Iseconds > "$marker"`. It records the
+last time this end heard anything at all, which is the one fact the channel
+cannot report about itself.
+
+Keep it **outside** the channel. `notifications/` belongs to the session and
+the pull owns it with `--delete`, so a marker there is deleted on every cycle
+and rewritten at the end of the ones that get far enough — which reads as
+fresh forever and can never report a problem. `inz sync` refuses such a path
+rather than letting it look like it works.
+
+The time is read out of the file's contents, with its mtime as a fallback, and
+the file is *opened* rather than stat-ed. That is deliberate: a marker is
+overwritten in place, and on a File Provider mount — iCloud, Dropbox,
+Nextcloud on macOS — a stat describes the placeholder the provider last wrote
+down rather than the file. It is the same trap `channel._doc` avoids by
+reading every singleton on every scan. A marker left by a plain `touch` still
+works, on its mtime.
 
 The marker is judged against `sync_interval_seconds` the same way a heartbeat
 is judged against its own promise, with the same grace. What it buys:
