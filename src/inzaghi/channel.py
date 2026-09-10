@@ -20,6 +20,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from time import monotonic
+from typing import NamedTuple
 
 from collections.abc import Iterable
 
@@ -40,6 +42,11 @@ NOTIFICATIONS = "notifications"
 ATTACHMENTS = attach.ATTACHMENTS
 INBOX = "inbox"
 DONE = "done"
+
+#: How long a cached parse is trusted before the file is read again whatever
+#: ``stat`` says about it.  Nothing on a local disk needs this; a synced folder
+#: does.  See :meth:`Channel._doc`.
+CACHE_SECONDS = 60.0
 
 _TEXT_SUFFIXES = frozenset({".md", ".txt", ".markdown"})
 _ACK_REF_RE = re.compile(r"\bre[:\-]\s*(?P<ref>.+?)\s*$", re.I)
@@ -67,6 +74,17 @@ def absence_is_real(path: Path) -> bool:
     return path.parent.is_dir() and not path.exists()
 
 
+class _Cached(NamedTuple):
+    """A parse, with what the file looked like and when we last believed it."""
+
+    #: mtime, size, ctime and inode, as of the read.
+    fingerprint: tuple[float, int, float, int]
+    #: ``monotonic()`` at the read, so that a clock the sync client adjusts
+    #: cannot make a parse look newer than it is.
+    read_at: float
+    doc: Doc
+
+
 @dataclass
 class Channel:
     """One folder, plus how we are allowed to treat it."""
@@ -84,7 +102,7 @@ class Channel:
     sync_interval: timedelta | None = None
     #: ``user@host:/path`` this folder is mirrored from, for ``inz sync``.
     remote: str = ""
-    _cache: dict[Path, tuple[float, int, Doc]] = field(default_factory=dict, repr=False)
+    _cache: dict[Path, _Cached] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         self.root = Path(self.root).expanduser()
@@ -110,21 +128,64 @@ class Channel:
     def done_dir(self) -> Path:
         return self.inbox_dir / DONE
 
-    def _doc(self, path: Path) -> Doc | None:
-        """Load a document, reusing the cached parse when it has not changed."""
+    def _doc(self, path: Path, *, trust_stat: bool = True) -> Doc | None:
+        """Load a document, reusing the cached parse when it has not changed.
+
+        "Has not changed" is a question for the filesystem, and a File Provider
+        mount -- iCloud, Dropbox, Nextcloud on macOS -- answers it about the
+        placeholder standing in for the file rather than about the file. The
+        contents live on a server until something opens them; until then
+        ``stat`` reports whatever the provider last wrote into the placeholder,
+        which is not necessarily what the session has written since. A cache
+        that believes it will stop reading the file, and a file nobody reads is
+        a file the provider is never asked to fetch: the staleness holds until
+        the process restarts. Three things follow, and they are this method.
+
+        ``trust_stat=False`` reads every time, and the scan passes it for the
+        files that are overwritten in place. Those are the only ones a stale
+        stat can hide -- a new notification is a new path, and a new path is
+        always read -- and they are the ones whose freshness is the entire
+        point of the panels above the log. Opening them is also what prompts
+        the provider to fetch them, so the files that most need to be current
+        are the ones we keep asking for.
+
+        The fingerprint carries ``st_ctime`` and the inode beside mtime and
+        size. A provider swapping a file's contents underneath us touches the
+        inode, and marks the metadata, even when the modification date it
+        reports stays where it was; and a heartbeat rewritten with a new
+        timestamp is almost always the same length as the one before it, so
+        size vouches for nothing on its own.
+
+        And no parse is trusted for longer than ``CACHE_SECONDS``, so that a
+        stat which has stopped moving altogether costs one stale minute rather
+        than the rest of the session.
+        """
         try:
             stat = path.stat()
         except OSError:
             self._cache.pop(path, None)
             return None
+        fingerprint = (stat.st_mtime, stat.st_size, stat.st_ctime, stat.st_ino)
         cached = self._cache.get(path)
-        if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
-            return cached[2]
+        if (
+            trust_stat
+            and cached is not None
+            and cached.fingerprint == fingerprint
+            and monotonic() - cached.read_at < CACHE_SECONDS
+        ):
+            return cached.doc
         try:
             doc = Doc.load(path)
         except OSError:
             return None
-        self._cache[path] = (stat.st_mtime, stat.st_size, doc)
+        # A file that turned out to be unchanged keeps the document it already
+        # had. Re-reading is about not trusting the stat, not about handing the
+        # widgets a new object every poll: the panes compare what they are
+        # showing against what the scan found, and an identical parse under a
+        # new identity is a redraw nobody asked for.
+        if cached is not None and cached.doc == doc:
+            doc = cached.doc
+        self._cache[path] = _Cached(fingerprint, monotonic(), doc)
         return doc
 
     def scan(self, now: datetime | None = None) -> Snapshot:
@@ -138,15 +199,19 @@ class Channel:
             if parse.is_conflict_copy(path.name):
                 conflicts.append(path)
                 continue
-            doc = self._doc(path)
+            # Asked before the load rather than after it: whether a file is
+            # rewritten in place is exactly the question of whether its cached
+            # parse may be trusted.
+            singleton = _is_singleton(path.name)
+            doc = self._doc(path, trust_stat=not singleton)
             if doc is None:
                 continue
-            if _is_singleton(path.name):
+            if singleton:
                 pinned[path.name] = doc
                 continue
             events.append(_inbound_event(doc))
 
-        readme = self._doc(self.root / "README.md")
+        readme = self._doc(self.root / "README.md", trust_stat=False)
         if readme is not None:
             pinned.setdefault("README.md", readme)
 
