@@ -1,0 +1,57 @@
+# The suite is the whole check: it covers the parsers, the channel scan, the
+# transport cycle and the Textual UI, and it runs headless, so there is nothing
+# here a terminal has to be present for.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      # One red combination should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        include:
+          # The floor `pyproject.toml` promises, and the version development
+          # happens on. Between them they catch the syntax and stdlib
+          # differences; the ones in the middle have never yet differed.
+          - { os: ubuntu-latest, python: "3.11" }
+          - { os: ubuntu-latest, python: "3.14" }
+          # macOS earns a job of its own. The transport shells out to rsync,
+          # and macOS ships openrsync -- a different implementation speaking
+          # protocol 29 -- while Linux has rsync 3.x. `attach` also branches
+          # per platform for how a delivered file is shown.
+          - { os: macos-latest, python: "3.14" }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Named in the log on purpose: the sync tests run rsync for real against
+      # a local path, so when one of them fails differently on one runner, the
+      # first question is which implementation answered.
+      - name: Report the rsync implementation
+        run: rsync --version | head -2
+
+      - name: Install, from the lock
+        run: uv sync --locked --python ${{ matrix.python }}
+
+      - name: Run the suite
+        run: uv run --no-sync --python ${{ matrix.python }} pytest -q

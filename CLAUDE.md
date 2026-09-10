@@ -147,4 +147,7 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   writes, so a poll that found nothing new costs nothing.
 - The skill's `reference/channel-README.md` is generated from
   `protocol.CHANNEL_README`; a test guards the drift, `inz skill sync` fixes it.
-- `uv run --with pytest pytest -q` to run the suite.
+- `uv run --with pytest pytest -q` to run the suite. CI runs the same one on
+  the floor `pyproject.toml` promises and on the version development happens
+  on, plus macOS -- which ships openrsync rather than rsync, and is the side
+  `transport` and `attach` branch for.

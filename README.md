@@ -17,6 +17,8 @@
    ~~~~~~~~~~~~~~~~~~~~~~~~
 ```
 
+[![tests](https://github.com/moodoki/inzaghi/actions/workflows/tests.yml/badge.svg)](https://github.com/moodoki/inzaghi/actions/workflows/tests.yml)
+
 A terminal interface to folder-based channels with unattended agent sessions.
 
 A long-running agent session on another machine writes what it is doing into a
