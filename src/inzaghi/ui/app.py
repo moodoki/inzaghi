@@ -10,8 +10,8 @@ refreshes only the countdowns.
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from itertools import count
 from pathlib import Path
@@ -36,6 +36,7 @@ from .mounting import composed
 from .overview import OverviewPane
 from .rows import HEALTH_STYLE
 from .vim import half_page, move
+from .volume import VolumePool, WorkerPool
 
 OVERVIEW_ID = "overview"
 #: Inside OverviewPane; its presence answers for the whole overview subtree.
@@ -61,6 +62,12 @@ CHORDS: dict[str, dict[str, str]] = {
 #: read costs one thread rather than a new one every poll.  One in flight of
 #: each, plus room for the threads a cancelled worker leaves behind.
 VOLUME_THREADS = 4
+
+#: And the bound on the pool everything else threaded lands in -- sending,
+#: deleting, opening, the preview's re-read.  Textual hands those to the
+#: loop's default executor, so this pool replaces it; the figure is the one
+#: asyncio would have chosen for the pool being replaced.
+WORKER_THREADS = min(32, (os.cpu_count() or 1) + 4)
 
 #: How long a prefix waits for the key that finishes it.  Vim calls this
 #: timeoutlen.  A sequence nobody completed has to expire rather than sit
@@ -139,9 +146,10 @@ class InzaghiApp(App):
         self._known_events: dict[str, set[str]] = {}
         self._known_health: dict[str, str] = {}
         #: Where a read of a channel's volume happens.  See ``VOLUME_THREADS``.
-        self._volume = ThreadPoolExecutor(
-            max_workers=VOLUME_THREADS, thread_name_prefix="inzaghi-volume"
-        )
+        self._volume = VolumePool(VOLUME_THREADS, name="inzaghi-volume")
+        #: And where every other threaded call happens.  See ``WORKER_THREADS``
+        #: -- not ``_workers``, which is Textual's own worker manager.
+        self._worker_pool = WorkerPool(WORKER_THREADS, name="inzaghi-worker")
         #: Whether a scan or a sweep is out there, and whether one was asked
         #: for while it was.  A blocked read cannot be cancelled, only waited
         #: for, so the only way not to pile them up is not to start them.
@@ -170,6 +178,9 @@ class InzaghiApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        # Before anything is scheduled: from here on, a Textual thread worker
+        # runs on threads nothing joins.  See ``ui/volume.py``.
+        asyncio.get_running_loop().set_default_executor(self._worker_pool)
         self.prune_receipts(self.config, set())
         self.rescan()
         self.set_interval(self.config.poll_seconds, self.rescan)
@@ -185,8 +196,10 @@ class InzaghiApp(App):
         self._closing = True
         self.state.save()
         # Without waiting: a read that is still out there is out there on a
-        # volume that has stopped answering, and quitting must not wait on it.
-        self._volume.shutdown(wait=False, cancel_futures=True)
+        # volume that has stopped answering, and quitting must not wait on it
+        # -- not here, and not at the interpreter's own exit either, which is
+        # the half a thread pool gets wrong.  See ``ui/volume.py``.
+        self._volume.shutdown()
 
     # -- scanning ---------------------------------------------------------
 

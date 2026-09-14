@@ -359,6 +359,39 @@ async def test_scanning_never_blocks_the_ui(channel_root):
     assert all(name.startswith("inzaghi-volume") for name in threads), threads
 
 
+async def test_quitting_does_not_wait_for_a_read_that_has_wedged(channel_root):
+    """Every thread the app waits on a volume from is a daemon.
+
+    A read inside a sync client cannot be called back, only waited for, and
+    the interpreter joins ordinary threads at exit -- after the screen has
+    been handed back, with nothing on it to explain the delay.  So both pools
+    are daemons: the scan's own, and the one Textual hands every thread
+    worker, which the app replaces at mount so that sending, opening and the
+    preview's re-read are covered too.
+    """
+    app = make_app(channel_root)
+    scanned_on: list[threading.Thread] = []
+    real_scan = channel_module.Channel.scan
+
+    def watched(self, now=None):
+        scanned_on.append(threading.current_thread())
+        return real_scan(self, now=now)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        with mock.patch.object(channel_module.Channel, "scan", watched):
+            app.rescan()
+            await settle(app, pilot)
+        worker = app.run_worker(threading.current_thread, thread=True)
+        await app.workers.wait_for_complete()
+        worked_on = worker.result
+
+    assert scanned_on, "nothing was scanned"
+    assert all(thread.daemon for thread in scanned_on), scanned_on
+    assert worked_on.daemon, worked_on
+    assert worked_on not in scanned_on, "a thread worker ran on the scan's pool"
+
+
 # -- one scan at a time ----------------------------------------------------
 #
 # A read of a channel's volume cannot be cancelled once it has begun, only
