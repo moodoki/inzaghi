@@ -44,6 +44,12 @@ class Harness:
 
 
 HARNESSES: dict[str, Harness] = {
+    "antigravity": Harness(
+        name="antigravity",
+        user_dir=Path("~/.gemini/config/skills"),
+        project_dir=".agents/skills",
+        layout="a directory holding SKILL.md with YAML front matter",
+    ),
     "claude-code": Harness(
         name="claude-code",
         user_dir=Path("~/.claude/skills"),

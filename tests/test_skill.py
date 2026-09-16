@@ -108,9 +108,13 @@ def test_an_unknown_harness_is_rejected():
         skill.install("opencode")
 
 
-def test_adding_a_harness_is_one_registry_entry():
-    """The extension point, pinned so it stays a one-liner."""
-    assert set(skill.HARNESSES) == {"claude-code"}
+def test_harness_registry_entries():
+    """Verify built-in harness extension points."""
+    assert set(skill.HARNESSES) == {"antigravity", "claude-code"}
     assert skill.HARNESSES["claude-code"].destination(Path("/p")) == Path(
         "/p/.claude/skills/inzaghi"
     )
+    assert skill.HARNESSES["antigravity"].destination(Path("/p")) == Path(
+        "/p/.agents/skills/inzaghi"
+    )
+
