@@ -145,6 +145,11 @@ class InzaghiApp(App):
         self._pane_counter = count()
         self._known_events: dict[str, set[str]] = {}
         self._known_health: dict[str, str] = {}
+        #: Unread paths per channel, or None when they need recomputing.
+        self._unread: dict[str, set[str]] | None = None
+        #: Whether the last poll found conflicts, so the footer is recomposed
+        #: when that changes rather than every poll.
+        self._had_conflicts = False
         #: Where a read of a channel's volume happens.  See ``VOLUME_THREADS``.
         self._volume = VolumePool(VOLUME_THREADS, name="inzaghi-volume")
         #: And where every other threaded call happens.  See ``WORKER_THREADS``
@@ -159,6 +164,10 @@ class InzaghiApp(App):
         #: Set once the app is going away, so that a timer which fires during
         #: teardown does not hand work to a pool that has been shut down.
         self._closing = False
+        #: Files whose read is out, as ``(channel key, attachment name)``. A
+        #: poll that finds one already reading leaves it alone; see
+        #: ``_open_attachment``.
+        self._reading: set[tuple[str, str]] = set()
         #: The half-typed key sequence, if there is one, and the timer that
         #: gives up on it.
         self._pending: str | None = None
@@ -339,6 +348,7 @@ class InzaghiApp(App):
         synced folder is allowed to be absent, half-there or an hour behind,
         and none of that is evidence about anything.
         """
+        self._forget_unread()
         for key in gone:
             self.state.forget(key)
         # A config naming nothing would condemn every channel at once. That is
@@ -350,11 +360,13 @@ class InzaghiApp(App):
         self.state.save()
 
     async def _add_channel(self, tabs: TabbedContent, channel: Channel) -> None:
+        self._forget_unread()
         self.channels.append(channel)
         await tabs.add_pane(TabPane(channel.name, ChannelPane(channel), id=self._new_pane_id(channel)))
         self.notify(f"New channel: {channel.name}")
 
     async def _drop_channel(self, tabs: TabbedContent, channel: Channel) -> None:
+        self._forget_unread()
         pane_id = self._pane_ids.pop(channel.key, None)
         self.channels.remove(channel)
         self.snapshots.pop(channel.key, None)
@@ -364,20 +376,43 @@ class InzaghiApp(App):
             await tabs.remove_pane(pane_id)
 
     def _apply(self, scanned: dict[str, Snapshot], now: datetime) -> None:
+        self._forget_unread()  # new events are unread events
         for key, snapshot in scanned.items():
             self._alert(key, snapshot, now)
         self.snapshots.update(scanned)
         self._refresh_widgets(now)
         self.state.save()
 
+    def _forget_unread(self) -> None:
+        """Something moved a receipt, a snapshot or a channel; recompute."""
+        self._unread = None
+
+    def _unread_paths(self) -> dict[str, set[str]]:
+        """Which entries are unread, per channel, computed at most once a poll.
+
+        Read receipts are only ever written here, so nothing outside the app
+        can make this answer stale: it is recomputed when a scan lands or when
+        something marks a row read, and read from the cache in between. The
+        one-second tick asked for it again every time, walking every event in
+        every channel to draw a number that had not changed.
+        """
+        if self._unread is None:
+            self._unread = {
+                channel.key: {
+                    str(event.path) for event in self.state.unread(channel.key, snapshot)
+                }
+                for channel in self.channels
+                if (snapshot := self.snapshots.get(channel.key)) is not None
+            }
+        return self._unread
+
     def _refresh_widgets(self, now: datetime) -> None:
-        unread_paths: dict[str, set[str]] = {}
+        unread_paths = self._unread_paths()
         for channel in self.channels:
             snapshot = self.snapshots.get(channel.key)
             if snapshot is None:
                 continue
-            unread = {str(event.path) for event in self.state.unread(channel.key, snapshot)}
-            unread_paths[channel.key] = unread
+            unread = unread_paths.get(channel.key, set())
             pane = self._pane_for(channel.key)
             if pane is not None:
                 pane.update(snapshot, unread, now)
@@ -385,8 +420,12 @@ class InzaghiApp(App):
         if composed(self, OVERVIEW_TABLE):
             self.query_one(OverviewPane).update(self.channels, self.snapshots, unread_paths, now)
         # check_action() results are cached, so the footer would keep offering
-        # "k Clean" after the last conflict copy was deleted.
-        self.refresh_bindings()
+        # "K Clean" after the last conflict copy was deleted -- but recomposing
+        # the footer is not free, so only when the answer actually changed.
+        conflicts = bool(self._conflicts())
+        if conflicts != self._had_conflicts:
+            self._had_conflicts = conflicts
+            self.refresh_bindings()
 
     def _tick(self) -> None:
         """Cheap per-second refresh: countdowns only, no disk access.
@@ -395,16 +434,19 @@ class InzaghiApp(App):
         enough for the tabs to have mounted -- see ``ui.mounting``.
         """
         now = datetime.now().astimezone()
+        if not composed(self, "#tabs"):
+            return  # the first tick can beat the tabs onto the screen
+        # Only the pane in front: a Static.update is a relayout of the whole
+        # screen, and the three behind it are redrawn when their tab comes up.
+        active = self.query_one("#tabs", TabbedContent).active
         for pane in self.query(ChannelPane):
-            pane.update_strip(now)
-        if not composed(self, OVERVIEW_TABLE):
+            if pane.parent is not None and pane.parent.id == active:
+                pane.update_strip(now)
+        if active != OVERVIEW_ID or not composed(self, OVERVIEW_TABLE):
             return
-        unread = {
-            channel.key: {str(event.path) for event in self.state.unread(channel.key, snapshot)}
-            for channel in self.channels
-            if (snapshot := self.snapshots.get(channel.key)) is not None
-        }
-        self.query_one(OverviewPane).update(self.channels, self.snapshots, unread, now)
+        self.query_one(OverviewPane).update(
+            self.channels, self.snapshots, self._unread_paths(), now
+        )
 
     def _badge(self, channel: Channel, snapshot: Snapshot, unread: int, now: datetime) -> None:
         """Put liveness and unread count on the tab itself."""
@@ -581,6 +623,7 @@ class InzaghiApp(App):
         for item in snapshot.events:
             if str(item.path) == event.path:
                 self.state.mark_read(event.channel_key, item)
+                self._forget_unread()
                 break
 
     @on(ChannelPane.Open)
@@ -592,26 +635,45 @@ class InzaghiApp(App):
         else is handed to the desktop. Both wait on the channel's volume, so
         both leave the UI thread here.
         """
-        if event.attachment.disposition == "read":
-            self._read_attachment(event.channel_key, event.attachment, event.refresh)
-        else:
+        if event.attachment.disposition != "read":
             self._launch(event.attachment)
+            return
+        reading = (event.channel_key, event.attachment.name)
+        if event.refresh and reading in self._reading:
+            # A poll asking again for a file whose last read has not come
+            # back. Dropped rather than remembered: the poll *is* the retry,
+            # because the stamp it compares against is only updated by a read
+            # that landed. Someone pressing enter is never dropped -- that is
+            # a fresh intention, and it moves the keyboard as well.
+            return
+        self._reading.add(reading)
+        self._read_attachment(event.channel_key, event.attachment, event.refresh)
 
     @work(thread=True, group="open")
     def _read_attachment(self, key: str, attachment: Attachment, refresh: bool) -> None:
         """Read a text delivery off the UI thread.
 
-        Not ``exclusive``: a poll can ask for a re-read while an earlier one is
-        still waiting on the sync client, and cancelling the earlier one would
-        leave whichever pane asked first showing text it has been told is
-        stale. Both land; the pane ignores the one it no longer wants.
+        Not ``exclusive``, because cancelling a read that is on its way back
+        would leave the pane showing text it has been told is stale -- but not
+        unbounded either. Bounded by ``_reading`` in the caller above, which is
+        the same shape as the scan's ``_scanning``: one read out per open file,
+        and the poll asks again. Without that, a read wedged inside a sync
+        client takes a new thread every two seconds until the pool is full and
+        sending stops -- the failure ``d075d7c`` removed from the scan.
         """
         try:
             text, truncated = attach.read_text(attachment)
         except attach.CannotOpen as exc:
             self.call_from_thread(self.notify, str(exc), severity="error", timeout=20)
-            return
-        self.call_from_thread(self._previewed, key, attachment, text, truncated, refresh)
+        else:
+            self.call_from_thread(self._previewed, key, attachment, text, truncated, refresh)
+        finally:
+            # Last, and in a ``finally``. Last, because the stamp the next poll
+            # compares against is written by ``_previewed`` -- clearing the
+            # flag first leaves a gap in which a poll asks again for text that
+            # has already arrived. In a ``finally``, because a read that failed
+            # must not stop the file being read ever again.
+            self.call_from_thread(self._reading.discard, (key, attachment.name))
 
     def _previewed(
         self, key: str, attachment: Attachment, text: str, truncated: bool, refresh: bool
@@ -648,8 +710,10 @@ class InzaghiApp(App):
             for other in self.channels:
                 if (snapshot := self.snapshots.get(other.key)) is not None:
                     self.state.mark_all_read(other.key, snapshot)
+                    self._forget_unread()
         elif (snapshot := self.snapshots.get(channel.key)) is not None:
             self.state.mark_all_read(channel.key, snapshot)
+            self._forget_unread()
         self.state.save()
         self._refresh_widgets(datetime.now().astimezone())
 
@@ -797,6 +861,14 @@ class InzaghiApp(App):
     # -- helpers ----------------------------------------------------------
 
     def current_channel(self) -> Channel | None:
+        """The channel whose tab is in front, if there is one yet.
+
+        Guarded rather than trusting the tabs to exist: this is reached from a
+        timed refresh as well as from a key, and a poll can land before the
+        tabs are mounted or after they have gone.
+        """
+        if not composed(self, "#tabs"):
+            return None
         active = self.query_one("#tabs", TabbedContent).active
         for channel in self.channels:
             if self._pane_ids.get(channel.key) == active:

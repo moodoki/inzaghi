@@ -103,6 +103,12 @@ class Channel:
     #: ``user@host:/path`` this folder is mirrored from, for ``inz sync``.
     remote: str = ""
     _cache: dict[Path, _Cached] = field(default_factory=dict, repr=False)
+    #: The attachment names each parse points at, kept beside the parse it was
+    #: read out of.  Held by the ``Doc`` it came from rather than by path, so
+    #: a file that was re-read never answers with the old document's names.
+    _refs: dict[Path, tuple[Doc, tuple[tuple[str, str], ...]]] = field(
+        default_factory=dict, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.root = Path(self.root).expanduser()
@@ -188,6 +194,27 @@ class Channel:
         self._cache[path] = _Cached(fingerprint, monotonic(), doc)
         return doc
 
+
+    def _references(self, doc: Doc) -> tuple[tuple[str, str], ...]:
+        """The attachment names ``doc`` points at, extracted once per parse.
+
+        The extraction is a regex pass over the whole body -- fences and code
+        spans stripped, then every link -- and it is the single most expensive
+        thing a scan does to a document that has not changed. It is also a
+        pure function of the text, so it can be kept for as long as the parse
+        is: the ``Doc`` is held in the entry and compared by identity, so a
+        file that was read again never answers with the old one's names.
+
+        What is *not* kept is whether those names are on disk. That answer
+        changes when a payload finishes syncing, with the prose untouched.
+        """
+        entry = self._refs.get(doc.path)
+        if entry is not None and entry[0] is doc:
+            return entry[1]
+        found = tuple(attach.refs(doc))
+        self._refs[doc.path] = (doc, found)
+        return found
+
     def scan(self, now: datetime | None = None) -> Snapshot:
         now = now or datetime.now().astimezone()
         pinned: dict[str, Doc] = {}
@@ -222,7 +249,9 @@ class Channel:
         # delivers, and the folder it delivers into is its own.
         attachments: dict[Path, tuple[Attachment, ...]] = {}
         for doc in (*pinned.values(), *(event.doc for event in events)):
-            found = attach.resolve(self.attachments_dir, doc)
+            found = attach.resolve(
+                self.attachments_dir, doc, references=self._references(doc)
+            )
             if found:
                 attachments[doc.path] = found
 

@@ -349,6 +349,14 @@ can move through entries and read them; `c` returns to it with the text intact.
 `ctrl+s` sends, `ctrl+e` opens `$EDITOR`, `ctrl+g` discards. A send that fails
 keeps the draft to retry.
 
+A message is staged at the top of the channel and renamed into `inbox/`, so
+the folder a session watches never holds a half-written instruction — atomic
+is not the same as invisible, and the instant a temporary appears is the
+instant a session woken by the create event looks. The contract tells the
+session the other half of that rule: read only `*.md` entries whose names do
+not begin with a dot, because a sync client stages its own downloads there and
+no care on this side prevents it.
+
 ## Sync-conflict copies
 
 A sync client that cannot merge an overwritten file leaves a duplicate beside

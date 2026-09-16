@@ -107,6 +107,16 @@ then move the file to `inbox/done/`, prefixing the pickup time
 (`YYYY-MM-DD_HHMM_`) onto its name. Leave the file's mtime alone — it is the
 only record of when the message was written.
 
+**Read only `*.md` files whose names do not begin with a dot.** Everything
+else in this folder is a delivery in progress: a watcher staging a message, or
+a sync client fetching one, leaves entries like `.inzaghi-x9syq66e.partial` or
+`.2026-09-10_1403_pause.md.~7f1e135d` for as long as the transfer takes. They
+are half-written or empty by definition, and the instant one appears is the
+instant a session watching the folder looks — the create event is what wakes
+it. The same rule reads `notifications/` from the other end, and it is the
+mirror of writing atomically: a temporary is not a message until it has been
+renamed.
+
 Keywords recognised on sight: `PAUSE` (finish the current step, start no new
 jobs), `RESUME`, `STOP` (finish the current step, write a summary, end the
 loop), `STATUS` (write a fresh `STATUS.md` now). Anything else is free-form.

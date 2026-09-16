@@ -150,3 +150,101 @@ async def test_moving_to_another_entry_does_scroll_to_its_top(reading):
         await pilot.pause()
 
         assert scrolls, "a different document should start at its top"
+
+
+# -- not rebuilding what did not change -----------------------------------
+
+
+def count_builds(pane, monkeypatch) -> list[int]:
+    """Count the rebuilds of the row list, without changing what it returns."""
+    calls: list[int] = []
+    import inzaghi.ui.channel_view as view
+
+    original = view.build_rows
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(view, "build_rows", counted)
+    return calls
+
+
+async def test_a_poll_that_found_nothing_does_not_rebuild_the_rows(reading, monkeypatch):
+    """The documents are the same objects the cache handed back and the labels
+    still read the same, so there is nothing for a rebuild to produce."""
+    app = reading
+    async with app.run_test() as pilot:
+        pane = await open_channel(app, pilot)
+        snapshot = app.snapshots[pane.channel.key]
+        unread = {str(e.path) for e in app.state.unread(pane.channel.key, snapshot)}
+        builds = count_builds(pane, monkeypatch)
+
+        for second in range(1, 6):
+            pane.update(snapshot, set(unread), pane._built_at + timedelta(seconds=second))
+            await pilot.pause()
+
+        assert builds == [], f"rebuilt {len(builds)} times with nothing to show"
+
+
+async def test_a_label_coming_due_rebuilds_them(reading, monkeypatch):
+    app = reading
+    async with app.run_test() as pilot:
+        pane = await open_channel(app, pilot)
+        snapshot = app.snapshots[pane.channel.key]
+        unread = {str(e.path) for e in app.state.unread(pane.channel.key, snapshot)}
+        due = pane._labels_at
+        builds = count_builds(pane, monkeypatch)
+
+        pane.update(snapshot, set(unread), due - timedelta(milliseconds=1))
+        await pilot.pause()
+        assert builds == [], "rebuilt before any label was due"
+
+        pane.update(snapshot, set(unread), due)
+        await pilot.pause()
+        assert len(builds) == 1, "the label came due and the rows were not rebuilt"
+
+
+async def test_anything_the_scan_changed_rebuilds_them(reading, channel_root, monkeypatch):
+    """Each of the things a row is built from, one at a time."""
+    app = reading
+    async with app.run_test() as pilot:
+        pane = await open_channel(app, pilot)
+        key = pane.channel.key
+        builds = count_builds(pane, monkeypatch)
+        soon = pane._built_at + timedelta(seconds=1)
+
+        # A new entry.
+        write(
+            channel_root / "notifications" / "2026-09-05_0530_milestone_new-one.md",
+            "# [milestone] A new one\n",
+        )
+        app.rescan()
+        await settle(app, pilot)
+        assert len(builds) >= 1, "a new notification did not rebuild"
+
+        # A row read.
+        snapshot = app.snapshots[key]
+        before = len(builds)
+        pane.update(snapshot, set(), soon)
+        await pilot.pause()
+        assert len(builds) == before + 1, "an emptied unread set did not rebuild"
+
+
+async def test_the_reader_is_still_refreshed_on_a_skipped_poll(reading, monkeypatch):
+    """The convention the skip must not break: what the selected entry holds
+    can change while its row does not -- a rewritten status file, an
+    attachment that has landed, and the open file's own re-read timer."""
+    app = reading
+    async with app.run_test() as pilot:
+        pane = await open_channel(app, pilot)
+        snapshot = app.snapshots[pane.channel.key]
+        unread = {str(e.path) for e in app.state.unread(pane.channel.key, snapshot)}
+        shown: list[str] = []
+        monkeypatch.setattr(
+            type(pane), "_show", lambda self, row: shown.append(row.key)
+        )
+
+        pane.update(snapshot, set(unread), pane._built_at + timedelta(seconds=1))
+        await pilot.pause()
+        assert shown, "the reader was skipped along with the rows"

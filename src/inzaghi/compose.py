@@ -6,10 +6,21 @@ will happily upload a half-written instruction, and a truncated ``STOP`` is a
 worse outcome than no ``STOP``.  And a channel marked ``read_only`` refuses
 them outright, which is how a live session's folder is protected from a
 development build.
+
+Atomic is not the same as invisible, and the difference showed up in a live
+channel.  A rename is atomic, but the temporary being renamed *from* is a
+directory entry like any other, and a session woken by the create event lists
+``inbox/`` at exactly the moment it exists.  So the staging file is written
+beside the channel rather than inside the folder being watched -- same
+filesystem, so the rename is still atomic, but nothing half-written is ever
+listed as an instruction.  The contract carries the other half of that rule,
+because a sync client leaves temporaries of its own here and no amount of care
+on this side stops it.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import tempfile
 from dataclasses import dataclass
@@ -55,7 +66,9 @@ def send(channel: Channel, text: str, *, slug: str | None = None, now: datetime 
     inbox = channel.inbox_dir
     inbox.mkdir(parents=True, exist_ok=True)
     target = _unique(inbox, filename(body, slug=slug, now=now))
-    _atomic_write(target, body + "\n")
+    # Staged at the top of the channel: the session watches inbox/, and nobody
+    # reads the root for anything but README.md.
+    _atomic_write(target, body + "\n", staging=channel.root)
     return target
 
 
@@ -85,25 +98,40 @@ def _unique(directory: Path, name: str) -> Path:
     raise FileExistsError(f"cannot find a free name for {name} in {directory}")
 
 
-def _atomic_write(path: Path, text: str) -> None:
-    """Write via a temp file in the same directory, then rename into place.
+def _atomic_write(path: Path, text: str, *, staging: Path | None = None) -> None:
+    """Write via a temp file, then rename it into place.
 
     The rename is atomic on the same filesystem, so a reader -- the session or
-    the sync client -- never sees a partial message.
+    the sync client -- never sees a partial message.  ``staging`` says where
+    the temporary lives until then; it has to be on the same filesystem as
+    ``path``, and it should not be a folder anybody watches for work.  Without
+    it the temporary sits beside the target, which is atomic but visible.
+
+    A staging directory that turns out to be a different filesystem is not an
+    error worth failing a send over: the rename says so, and the write falls
+    back to the target's own directory, which is what the contract's reading
+    rule covers anyway.
     """
-    handle, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".inzaghi-", suffix=".partial")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        # mkstemp is 0600; the session reading this folder may well be another
-        # user on another machine, so widen to the usual umask-respecting mode.
-        os.chmod(tmp, 0o666 & ~_umask())
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    for directory in (staging or path.parent, path.parent):
+        handle, tmp = tempfile.mkstemp(dir=str(directory), prefix=".inzaghi-", suffix=".partial")
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            # mkstemp is 0600; the session reading this folder may well be
+            # another user on another machine, so widen to the usual
+            # umask-respecting mode.
+            os.chmod(tmp, 0o666 & ~_umask())
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            Path(tmp).unlink(missing_ok=True)
+            if exc.errno != errno.EXDEV or directory == path.parent:
+                raise
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
 
 def _umask() -> int:
