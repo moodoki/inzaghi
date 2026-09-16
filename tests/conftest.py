@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,6 +13,24 @@ from inzaghi.channel import Channel
 
 TZ = timezone(timedelta(hours=8))
 NOW = datetime(2026, 9, 5, 6, 0, tzinfo=TZ)
+
+# Every timestamp below is written in ``TZ``, and so is ``NOW``. A filename
+# stamp carries no zone, so ``parse._stamp_to_dt`` reads one as *local* time
+# -- which is right, and which quietly makes the fixtures mean "local is
+# +08:00". Run the suite anywhere else and a local reading is compared against
+# a +08:00 literal: ``round_trip`` comes out an offset too long, and an event
+# sorted by a local stamp changes places with one carrying an explicit zone,
+# so an assertion about ``events[0]`` reads a different event entirely.
+#
+# So pin it, rather than write every fixture twice. Asia/Singapore is +08:00
+# the year round -- no DST to move underneath a literal -- and this is set at
+# import, before a fixture has read the clock. The project ships for macOS and
+# Linux, both of which have ``tzset``.
+os.environ["TZ"] = "Asia/Singapore"
+time.tzset()
+assert datetime.now().astimezone().utcoffset() == TZ.utcoffset(None), (
+    "the suite's fixtures are written in +08:00 and the local zone is not"
+)
 
 
 def write(path: Path, text: str, *, mtime: datetime | None = None) -> Path:
