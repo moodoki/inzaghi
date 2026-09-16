@@ -52,7 +52,14 @@ should live if it is not already obvious or specified.
 
 ## At every wakeup, in this order
 
-1. **Read `inbox/`.** Every file there is an instruction addressed to you.
+1. **Read `inbox/`.** Every `*.md` file there whose name does not begin with a
+   dot is an instruction addressed to you. Skip everything else: a message
+   being delivered, by the watcher or by the sync client, exists as
+   `.inzaghi-x9syq66e.partial` or `.2026-09-10_1403_pause.md.~7f1e135d` until
+   the transfer finishes. `ls inbox/` hides those; `ls -A inbox/` does not, so
+   filter rather than trusting the listing. They are half-written or empty,
+   and the moment one appears is the moment a watching session looks — the
+   create event is what woke it.
 2. **Act on it**, then write an `ack` notification saying what you actually did.
 3. **Move the file to `inbox/done/`**, prefixing the pickup time to its name:
    `2026-09-05_1130_<original-name>`. Do not touch its mtime — that is the only
