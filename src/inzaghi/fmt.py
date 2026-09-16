@@ -39,6 +39,44 @@ def ago(when: datetime | None, now: datetime) -> str:
     return f"{duration(delta)} ago" if delta > timedelta(0) else f"in {duration(-delta)}"
 
 
+def next_change(when: datetime | None, now: datetime) -> datetime | None:
+    """When a label showing ``when`` relative to ``now`` would first read differently.
+
+    The rows carry relative times, so they go stale on their own schedule
+    rather than when anything happened: "4m ago" is wrong a minute later and
+    right until then.  This says when that moment is, so a poll that found no
+    new files can leave the rows alone instead of rebuilding them to print the
+    same words -- which is most polls, since a label changes once a minute and
+    the poll runs every two seconds.
+
+    Mirrors ``ago`` and ``duration`` bucket for bucket; get one wrong and a row
+    freezes.  ``None`` when there is nothing to go stale.
+    """
+    if when is None:
+        return None
+    age = (now - when).total_seconds()
+    if age < 0:  # in the future: counts down every second
+        return now + timedelta(seconds=1)
+    if age < 45:
+        return when + timedelta(seconds=45)  # "now" until then
+    if age < 60:
+        return now + timedelta(seconds=1)  # seconds, ticking
+    # The same buckets ``duration`` picks from, and the one it is in decides
+    # when the number it prints goes up.
+    for size, until in ((60, 3600), (3600, 86400), (86400, None)):
+        if until is None or age < until:
+            return when + timedelta(seconds=(int(age // size) + 1) * size)
+    return None
+
+
+def next_midnight(now: datetime) -> datetime:
+    """Local midnight after ``now``: when ``clock`` starts dating a timestamp."""
+    local = now.astimezone()
+    return (local + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+
 def clock(when: datetime | None, now: datetime | None = None) -> str:
     """``06:27`` for today, ``Sep 04 23:25`` once it is not today."""
     if when is None:

@@ -67,6 +67,12 @@ class Row:
     readable: bool = False
     #: Lowercased haystack for search: the title and the whole document.
     text: str = ""
+    #: The timestamp this row's label renders *relatively* -- "4m ago" -- if it
+    #: renders one at all. It is what makes a label go stale with nothing
+    #: having happened, and ``labels_change_at`` asks every row for it so a
+    #: poll that found nothing new can leave the rows alone. A row whose label
+    #: carries only a clock time is ``None``: that one changes at midnight.
+    relative: datetime | None = None
     #: Files this entry delivered, in the order it named them.
     attachments: tuple[Attachment, ...] = ()
 
@@ -79,6 +85,21 @@ def stamp(ts: datetime | None, now: datetime) -> str:
 def clean_title(text: str) -> str:
     """Drop the leading ``[kind]`` marker; the kind has its own column."""
     return _KIND_PREFIX_RE.sub("", text.strip())
+
+
+def labels_change_at(rows: list[Row], now: datetime) -> datetime:
+    """The first moment any of these labels would read differently.
+
+    Until then a rebuild would print the same words, which is what makes it
+    skippable: relative times are the only thing in a row that changes without
+    the channel changing, and midnight is the only thing that changes a clock.
+    """
+    moments = [
+        moment
+        for row in rows
+        if (moment := fmt.next_change(row.relative, now)) is not None
+    ]
+    return min([*moments, fmt.next_midnight(now)])
 
 
 def build_rows(snapshot: Snapshot, unread: set[str], now: datetime | None = None) -> list[Row]:
@@ -124,6 +145,7 @@ def _pinned_row(
         text=f"{title}\n{doc.body}".lower(),
         pinned=True,
         ts=updated,
+        relative=updated,
         attachments=attachments,
         label=(
             f"{'':>{STAMP_WIDTH - 2}}[b]▣ {escape(title):<14}[/]"
@@ -137,7 +159,11 @@ def _event_row(
 ) -> Row:
     mark, colour = KIND_STYLE.get(event.kind, ("·", "white"))
     is_unread = str(event.path) in unread
-    title = escape(clean_title(event.title))[:200]
+    # Once: ``Event.title`` parses the heading out of the body every time it is
+    # asked, and this row asks for it twice -- for the label and again for the
+    # haystack.
+    heading = event.title
+    title = escape(clean_title(heading))[:200]
     style = "b" if is_unread else "dim" if event.kind == "ack" else ""
     open_tag, close_tag = (f"[{style}]", "[/]") if style else ("", "")
     return Row(
@@ -147,7 +173,7 @@ def _event_row(
         ts=event.ts,
         unread=is_unread,
         readable=True,
-        text=f"{event.title}\n{event.doc.body}".lower(),
+        text=f"{heading}\n{event.doc.body}".lower(),
         attachments=attachments,
         label=(
             f"[dim]{stamp(event.ts, now)}[/] [{colour}]{mark}[/] "
@@ -159,7 +185,8 @@ def _event_row(
 
 def _thread_row(thread: Thread, now: datetime) -> Row:
     sent = thread.sent
-    title = escape(clean_title(sent.title))[:200]
+    heading = sent.title
+    title = escape(clean_title(heading))[:200]
     if thread.state == "acked":
         trip = thread.round_trip
         note = f"acked +{fmt.duration(trip, precise=True)}" if trip else "acked"
@@ -175,7 +202,10 @@ def _thread_row(thread: Thread, now: datetime) -> Row:
         doc=sent.doc,
         kind="message",
         ts=sent.ts,
-        text=f"{sent.title}\n{sent.doc.body}".lower(),
+        # Only the picked-up note is relative; "acked +2m" and "in flight" are
+        # fixed once written.
+        relative=thread.picked_up if thread.state == "picked-up" else None,
+        text=f"{heading}\n{sent.doc.body}".lower(),
         label=(
             f"[dim]{stamp(sent.ts, now)}[/] [{colour}]↑[/] "
             f"[{colour}]{'you':<13}[/] {title} [dim]· {note}[/]"

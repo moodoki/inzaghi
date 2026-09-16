@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from stat import S_ISREG
 from urllib.parse import unquote
@@ -146,13 +147,21 @@ def link_name(target: str) -> str:
     return _relative_to_folder(target, require_folder=True)
 
 
-def resolve(folder: Path, doc: Doc) -> tuple[Attachment, ...]:
+def resolve(
+    folder: Path, doc: Doc, *, references: Sequence[tuple[str, str]] | None = None
+) -> tuple[Attachment, ...]:
     """Every attachment ``doc`` names, checked against ``folder``.
 
     Touches the volume -- a couple of calls per reference -- so it belongs in
     the scan worker with everything else that can wait on a sync client.
+
+    ``references`` lets a caller hand over the names it already extracted.
+    Finding them is a regex pass over the whole body and gives the same answer
+    for as long as the text is unchanged; *checking* them does not, which is
+    why the two are separable and only one is worth keeping.
     """
-    return tuple(_resolve_one(folder, name, note) for name, note in refs(doc))
+    found = refs(doc) if references is None else references
+    return tuple(_resolve_one(folder, name, note) for name, note in found)
 
 
 def _resolve_one(folder: Path, name: str, note: str) -> Attachment:
