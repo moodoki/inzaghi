@@ -378,17 +378,18 @@ The other end of the link is an agent session that has to know how to operate
 the channel. That knowledge ships as a skill:
 
 ```sh
-inz skill install                      # for every session you start
+inz skill install                      # for every session you start (default: claude-code)
+inz skill install --harness antigravity # for Antigravity sessions
 inz skill install --project ~/work/northwind # for one project
 inz skill install --copy               # detached, for a machine without this repo
 ```
 
 It symlinks by default, so editing the skill in this repo updates every harness
-pointing at it. A session then picks it up by name (`/inzaghi` in Claude Code)
+pointing at it. A session then picks it up by name (`/inzaghi` in Claude Code or Antigravity)
 or from its description when a run is about to go unattended.
 
-`skills/inzaghi/SKILL.md` is harness-neutral Markdown — only its YAML front
-matter is Claude Code's format — and `reference/channel-README.md` beside it is
+`skills/inzaghi/SKILL.md` is harness-neutral Markdown — its standard YAML front
+matter is supported by both Claude Code and Antigravity — and `reference/channel-README.md` beside it is
 generated from `protocol.py`, so the contract a session reads and the contract
 `inz init` writes cannot drift (a test enforces it; `inz skill sync`
 regenerates). Supporting another harness is one entry in `skill.HARNESSES`.
