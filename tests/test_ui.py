@@ -1224,6 +1224,14 @@ async def test_the_tick_redraws_the_pane_in_front_only(channel_root, tmp_path):
         for pane in app.query(ChannelPane):
             pane.update_strip = lambda now, name=pane.channel.name: strips.append(name)
 
+        # The app's own timers are still running: `set_interval(1.0, _tick)`
+        # and the poll behind it. Clear whatever they have done, and do not
+        # yield again before asserting -- `_tick` is synchronous, so nothing
+        # can interleave inside it, and what lands in `strips` is this call's
+        # alone. Yield here instead and a slow machine has a tick already due:
+        # it fires inside the assertion's window and the front pane is counted
+        # twice, or the poll lands and redraws every pane including the ones
+        # behind, which is the very thing being asserted about.
+        strips.clear()
         app._tick()
-        await pilot.pause()
         assert strips == [channel_root.name], f"redrew panes that are not on screen: {strips}"
