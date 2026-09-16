@@ -35,6 +35,7 @@ from .model import (
     Snapshot,
     Status,
     Thread,
+    Transport,
 )
 
 NOTIFICATIONS = "notifications"
@@ -95,6 +96,12 @@ class Channel:
     read_only: bool = False
     #: Slack allowed past a promised heartbeat before it counts as late.
     grace: timedelta = DEFAULT_GRACE
+    #: A file the transport touches on success, if we are watching one.
+    sync_marker: Path | None = None
+    #: The cadence that marker is expected to keep.
+    sync_interval: timedelta | None = None
+    #: ``user@host:/path`` this folder is mirrored from, for ``inz sync``.
+    remote: str = ""
     _cache: dict[Path, _Cached] = field(default_factory=dict, repr=False)
     #: The attachment names each parse points at, kept beside the parse it was
     #: read out of.  Held by the ``Doc`` it came from rather than by path, so
@@ -248,6 +255,14 @@ class Channel:
             if found:
                 attachments[doc.path] = found
 
+        # Read here, with the rest of the volume work: the marker may itself
+        # sit on the folder being synced, and stat-ing it can block.
+        transport = (
+            Transport.read(self.sync_marker, self.sync_interval)
+            if self.sync_marker is not None
+            else None
+        )
+
         outbound = self._scan_outbound(conflicts, problems)
         events.sort(key=lambda e: e.ts, reverse=True)
         outbound.sort(key=lambda e: e.ts, reverse=True)
@@ -258,6 +273,7 @@ class Channel:
             scanned_at=now,
             heartbeat=Heartbeat.from_doc(pinned["HEARTBEAT.md"]) if "HEARTBEAT.md" in pinned else None,
             status=Status.from_doc(pinned["STATUS.md"]) if "STATUS.md" in pinned else None,
+            transport=transport,
             pinned=pinned,
             events=events,
             threads=_weave(outbound, events),

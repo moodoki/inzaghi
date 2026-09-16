@@ -73,16 +73,34 @@ def normalise_ref(name: str) -> str:
     An ack cites the message it answers by name, but the citation reaches us
     through slugified filenames and prose titles, so ``2026-09-04-heartbeat.md``
     and ``re-2026-09-04-heartbeat-md`` have to land on the same key.
+
+    Stamps come off repeatedly rather than once, because a message Inzaghi
+    sent carries one already: ``compose.filename`` names it
+    ``YYYY-MM-DD_HHMM_<slug>.md``, and the session prefixes the *pickup* time
+    onto that when it moves the file to ``done/``. The ack quotes the name it
+    was given, one stamp shorter, so the two only meet once both are gone.
     """
     name = re.sub(r"\.(md|txt|markdown)$", "", name.strip(), flags=re.I)
     # A slugified citation carries the extension as a trailing word:
     # "re: 2026-09-04-heartbeat.md" reaches us as "re-2026-09-04-heartbeat-md".
     name = re.sub(r"[-_](md|txt|markdown)$", "", name, flags=re.I)
     name = re.sub(r"^re[-_: ]+", "", name, flags=re.I)
-    stamped = _STAMPED_RE.match(name)
-    if stamped:
-        name = stamped.group("rest")
+    while (stamped := _STAMPED_RE.match(name)) is not None:
+        name = stamped.group("rest")  # ``rest`` is always shorter; this ends
     return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def strip_stamp(name: str) -> str:
+    """``2026-09-05_1200_X.md`` -> ``X.md``; anything else unchanged.
+
+    Exactly one stamp, unlike :func:`normalise_ref`, which takes them all off
+    to build a comparison key. Here the answer is a filename that has to match
+    another filename outright: the session prefixes the pickup time onto a
+    message when it moves it to ``done/``, so removing that one prefix gives
+    back the name the message had in ``inbox/`` and nothing else.
+    """
+    stamped = _STAMPED_RE.match(name)
+    return stamped.group("rest") if stamped else name
 
 
 @dataclass(frozen=True, slots=True)

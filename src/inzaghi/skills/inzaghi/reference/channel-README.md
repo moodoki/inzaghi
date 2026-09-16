@@ -125,6 +125,13 @@ whole every time.
 
 ## Housekeeping
 
-The sync client may leave `… (conflicted copy …)` duplicates when an
-overwritten file is edited mid-sync. They are copies of the session's own
-files; the session deletes them at wakeups.
+How this folder reaches the other end is not part of the contract. A
+filesystem the watcher can read directly, a sync client (Dropbox, iCloud,
+Syncthing), rsync over ssh on a timer — all satisfy it, and nothing above
+changes between them. One chore depends on which:
+
+A sync client that cannot merge an overwritten file leaves a
+`… (conflicted copy …)` duplicate beside it. Those are copies of the
+session's own files, and the session deletes them at wakeups. Nothing else
+produces them, so on any other transport the step finds nothing — do it
+anyway, and do not read an empty result as a sign that something is wrong.

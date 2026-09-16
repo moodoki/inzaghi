@@ -17,6 +17,8 @@
    ~~~~~~~~~~~~~~~~~~~~~~~~
 ```
 
+[![tests](https://github.com/moodoki/inzaghi/actions/workflows/tests.yml/badge.svg)](https://github.com/moodoki/inzaghi/actions/workflows/tests.yml)
+
 A terminal interface to folder-based channels with unattended agent sessions.
 
 A long-running agent session on another machine writes what it is doing into a
@@ -136,6 +138,144 @@ An unmounted volume looks exactly like a deletion, and a folder that still
 exists but has lost its `notifications/` is read as mid-sync rather than
 removed.
 
+## Moving a channel yourself
+
+A channel is a folder with a contract, and nothing in the contract says how
+the folder gets from one machine to the other. Three ways work, and none of
+them is a fallback for the others:
+
+1. **A filesystem both ends can reach** — the session writes, this client
+   reads, and there is no transport to go wrong.
+2. **A sync client** — Dropbox, iCloud, Syncthing. Store-and-forward, so
+   neither end has to be awake when the other writes, which is what makes it
+   the convenient default.
+3. **rsync over ssh**, below, for when you would rather not put the channel
+   through a third party, or there is no sync client on the box:
+
+```toml
+[[channels]]
+path = "~/channels/northwind"          # the mirror on this machine
+name = "northwind"
+remote = "worker:/srv/channels/northwind"
+sync_marker = "~/.local/state/inzaghi/northwind.synced"
+```
+
+```sh
+inz sync                # every channel with a remote
+inz sync northwind      # or one
+inz sync --dry-run      # print the rsync commands, quoted and runnable
+```
+
+The first run creates the mirror, so the folder does not have to exist yet.
+From cron, on the machine you watch from:
+
+```
+*/2 * * * * /path/to/inz sync >>~/.cache/inz-sync.log 2>&1
+```
+
+### Which end drives
+
+This drives from **the watching end**, pulling and pushing over ssh, which is
+the topology worth having when the session box is always on and the laptop is
+not. It needs no reverse channel, the intermittent end initiates so nothing
+ever dials a sleeping host, and the ssh key points from your laptop into the
+dev box rather than handing an unattended agent a foothold on your laptop.
+Confinement therefore belongs on the session box, in `authorized_keys`:
+
+```
+restrict,command="rrsync /srv/channels/northwind" ssh-ed25519 AAAA…
+```
+
+The cost is send latency: `ctrl+s` writes into the mirror, and the message
+leaves on the next cycle rather than at once.
+
+### The cycle, and why it is in that order
+
+    1. pull  notifications/   the session's, ours to overwrite wholesale
+    2. pull  inbox/done/       its receipts for what it has picked up
+    3. retire the local copy of every message that has turned up in done/
+    4. push  inbox/            what is left: messages not yet picked up
+
+The two ends never write the same thing — `notifications/` and `inbox/done/`
+are the session's, `inbox/` is written here and consumed there — so this is
+three one-way copies rather than a merge, with no conflict rules to get wrong.
+Step 3 is the one that decides something, and its position is load-bearing:
+push before retiring and you upload a message the session has already acted
+on, and it acts on it again.
+
+Neither inbox leg carries `--delete`, in either direction. Downward it would
+resurrect what the session just consumed; upward it would delete an
+instruction written thirty seconds ago and not yet read. Retirement is by
+exact filename instead — `X.md` goes only when `done/` holds a file called
+`X.md` with one pickup stamp in front of it — and every path is re-checked at
+the moment of unlinking, the same discipline the conflict cleanup follows.
+
+`-a` on every leg, because a message's send time *is* its mtime. No
+`--partial`, because rsync's default is to write a dot-prefixed temporary and
+rename on completion, which is exactly why a half-transferred file is
+invisible to the scanner and an attachment reads as *waiting on sync* until
+all of it is here. Cycles lock against each other with `fcntl` — a 600 MB
+attachment outlasts a two-minute cron — and a channel marked `read_only`
+refuses to sync at all, since pulling writes into the folder.
+
+## When the link is the problem, not the session
+
+A silent folder means a dead session only if the folder is still arriving.
+When the session writes straight into a filesystem this client can read, that
+is a given. On a sync client it is usually safe to assume. On rsync over ssh
+it is not — an unreachable host, or a laptop that slept through the last ten
+cron ticks, looks exactly like a session that died, because in both cases
+nothing new turns up.
+
+The marker below is worth setting for the third of those and pointless for the
+first: with no transport in the way, there is nothing that could stop
+arriving.
+
+Point a channel at a marker file and Inzaghi can tell them apart:
+
+```toml
+[[channels]]
+path = "~/channels/northwind"
+sync_marker = "~/.local/state/inzaghi/northwind.synced"
+sync_interval_seconds = 300
+```
+
+Whatever moves the folder writes that file on success — `inz sync` does, and
+so can a script of your own, with `date -Iseconds > "$marker"`. It records the
+last time this end heard anything at all, which is the one fact the channel
+cannot report about itself.
+
+Keep it **outside** the channel. `notifications/` belongs to the session and
+the pull owns it with `--delete`, so a marker there is deleted on every cycle
+and rewritten at the end of the ones that get far enough — which reads as
+fresh forever and can never report a problem. `inz sync` refuses such a path
+rather than letting it look like it works.
+
+The time is read out of the file's contents, with its mtime as a fallback, and
+the file is *opened* rather than stat-ed. That is deliberate: a marker is
+overwritten in place, and on a File Provider mount — iCloud, Dropbox,
+Nextcloud on macOS — a stat describes the placeholder the provider last wrote
+down rather than the file. It is the same trap `channel._doc` avoids by
+reading every singleton on every scan. A marker left by a plain `touch` still
+works, on its mtime.
+
+The marker is judged against `sync_interval_seconds` the same way a heartbeat
+is judged against its own promise, with the same grace. What it buys:
+
+- A **late heartbeat over a healthy link** still reads as `late` or `stale`.
+  The folder is arriving, so the silence is the session's, and the alert says
+  so.
+- A **late heartbeat with an overdue link** reads as `⇅ offline` instead. The
+  staleness is unexplained rather than damning, the strip says `no sync for
+  22m`, and the alert names the sync rather than sending you to look at a
+  session that may be fine.
+- A **fresh heartbeat with an overdue link** is left alone. It was true when
+  it was written, and a link that broke a minute ago has not made it false.
+
+Watching nothing changes nothing: without `sync_marker` every verdict is
+exactly what it was, and a marker that has never been touched — a sync not
+wired up yet — is treated as no promise rather than a broken one.
+
 ## Finding things in a long log
 
 `/` asks one of two questions, depending on where the keyboard is: *which
@@ -221,6 +361,9 @@ no care on this side prevents it.
 
 A sync client that cannot merge an overwritten file leaves a duplicate beside
 it — `STATUS (conflicted copy 2026-09-05).md`. These are never shown as events.
+They are specific to that kind of transport: a channel moved by rsync over ssh
+has none, because rsync overwrites rather than duplicating, and the strip and
+the `K` key simply stay quiet.
 When a channel has some, the strip says so and `K` offers to delete them, after
 a confirmation listing exactly what will go. The key is hidden otherwise, and on
 a `read_only` channel: read-only means untouched, not merely unwritten-to.
@@ -254,5 +397,6 @@ regenerates). Supporting another harness is one entry in `skill.HARNESSES`.
 
 Working: overview, per-channel tabs, timeline, reader, composer, quick actions,
 search and kind filtering, live discovery, and the `inzaghi ls | init | send |
-status` commands, the since-last-read divider, sync-conflict cleanup, delivered
-files, and the session-side skill.
+status | sync` commands, the since-last-read divider, sync-conflict cleanup,
+delivered files, ssh transport with a link-health marker, and the session-side
+skill.

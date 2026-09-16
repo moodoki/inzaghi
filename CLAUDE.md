@@ -29,6 +29,7 @@ belong in `CLAUDE.local.md`, which is not committed.
     src/inzaghi/channel.py   folder -> Snapshot, with a content cache
     src/inzaghi/attach.py    files a notification delivers: what one is,
                              reading a text one, launching the rest
+    src/inzaghi/transport.py rsync-over-ssh cycle for a folder no client syncs
     src/inzaghi/config.py    TOML config, root scanning, discovery
     src/inzaghi/state.py     local read receipts (never written into a channel)
     src/inzaghi/compose.py   atomic writes into inbox/
@@ -103,8 +104,14 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   `CACHE_SECONDS` is read again regardless. When the text that comes back
   disagrees with the stamp describing it, the text wins -- a re-read the clock
   had to ask for is precisely the one whose stat never moved.
-- `channel.remove_conflicts` is the only code that deletes anything; it
-  re-validates each path rather than trusting the snapshot it was given.
+- Two places delete: `channel.remove_conflicts` and `transport.retire`. Both
+  re-validate every path at the moment of unlinking rather than trusting the
+  listing they started from, and neither takes its decision from a fuzzy key --
+  retirement matches a filename outright, where threading is allowed to be
+  approximate. Add a third only with the same care.
+- The sync cycle pulls `done/` *before* it pushes `inbox/`, and retires in
+  between. Reordered, the push uploads a message the session already acted on
+  and it gets acted on twice. Neither inbox leg may ever carry `--delete`.
 - Read receipts are forgotten a whole channel at a time, and only on evidence
   from outside the channel: the config no longer watching it, or an absence
   `absence_is_real` will vouch for. Never per file -- a notification missing
@@ -177,4 +184,7 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   writes, so a poll that found nothing new costs nothing.
 - The skill's `reference/channel-README.md` is generated from
   `protocol.CHANNEL_README`; a test guards the drift, `inz skill sync` fixes it.
-- `uv run --with pytest pytest -q` to run the suite.
+- `uv run --with pytest pytest -q` to run the suite. CI runs the same one on
+  the floor `pyproject.toml` promises and on the version development happens
+  on, plus macOS -- which ships openrsync rather than rsync, and is the side
+  `transport` and `attach` branch for.

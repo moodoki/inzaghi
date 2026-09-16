@@ -8,6 +8,7 @@ script, ``inzaghi init`` when a new project starts.
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -94,6 +95,17 @@ def _parser() -> argparse.ArgumentParser:
     show = sub.add_parser("status", help="print a channel's STATUS.md")
     show.add_argument("channel")
     show.set_defaults(handler=_cmd_status)
+
+    sync = sub.add_parser(
+        "sync", help="pull and push a channel over ssh, for a folder no client syncs"
+    )
+    sync.add_argument(
+        "channel", nargs="*", help="names to sync; default is every one with a remote"
+    )
+    sync.add_argument(
+        "--dry-run", action="store_true", help="print the rsync commands without running them"
+    )
+    sync.set_defaults(handler=_cmd_sync)
 
     return parser
 
@@ -204,6 +216,44 @@ def _cmd_status(args, config: Config) -> int:
         return 1
     print(snap.status.doc.body.rstrip())
     return 0
+
+
+def _cmd_sync(args, config: Config) -> int:
+    """One cycle per channel, from cron or by hand.
+
+    Reports per channel and keeps going past a failure: a host that is down
+    must not stop the reachable ones from being brought up to date.
+    """
+    from . import transport
+
+    watched = config.syncable()
+    if args.channel:
+        wanted = {token.lower() for token in args.channel}
+        watched = [c for c in watched if c.name.lower() in wanted or str(c.root) in args.channel]
+    if not watched:
+        print(
+            f"{_prog()}: no channel has a remote to sync with"
+            f" — add remote = \"user@host:/path\" to a [[channels]] entry"
+            + (f" in {config.source}" if config.source else ""),
+            file=sys.stderr,
+        )
+        return 1
+
+    failed = 0
+    for name, outcome in transport.sync_all(watched, dry_run=args.dry_run).items():
+        if isinstance(outcome, Exception):
+            failed += 1
+            print(f"{_prog()}: {name}: {outcome}", file=sys.stderr)
+            continue
+        if args.dry_run:
+            # Quoted, so a line can be lifted out of here and run as it stands.
+            print(f"{name}:")
+            for command in outcome.commands:
+                print(f"  {shlex.join(command)}")
+            continue
+        retired = f", retired {len(outcome.retired)}" if outcome.retired else ""
+        print(f"{name}: synced{retired}")
+    return 1 if failed else 0
 
 
 def _resolve(token: str, config: Config) -> Channel | None:

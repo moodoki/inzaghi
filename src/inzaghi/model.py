@@ -9,7 +9,9 @@ from typing import Literal
 
 from . import parse
 
-Health = Literal["fresh", "late", "stale", "unknown"]
+#: ``offline`` is about the link rather than the session: nothing has
+#: reached this end recently, so the folder cannot be read as evidence.
+Health = Literal["fresh", "late", "stale", "unknown", "offline"]
 Direction = Literal["in", "out"]
 #: Whether a delivered file has arrived yet, or was refused on sight.
 Arrival = Literal["here", "syncing", "refused"]
@@ -100,6 +102,82 @@ class Attachment:
     def readable(self) -> bool:
         """Whether showing it means rendering it in the reader ourselves."""
         return self.arrival == "here" and self.disposition == "read"
+
+
+@dataclass(frozen=True, slots=True)
+class Transport:
+    """How the folder gets here, and when it last did.
+
+    A channel reaches this end through *something* -- a sync client, or rsync
+    over ssh on a timer -- and that something can stop without the session
+    noticing or caring. The marker is a file whatever moves the folder touches
+    on success, so its mtime is the last time this end heard anything at all.
+
+    It earns its place by separating two failures that look identical from
+    inside the folder: a link that has been down for an hour and a session
+    that died an hour ago both show up as nothing new arriving. Only something
+    outside the channel can tell them apart.
+    """
+
+    #: Just a path.  Outside the channel when this end drives the sync,
+    #: inside it when the far end pushes -- both work, and the difference is
+    #: the config's business rather than ours.
+    path: Path
+    #: Mtime of the marker, or ``None`` when there is no marker yet: a sync
+    #: that has never succeeded, or one not wired up to touch it.
+    synced_at: datetime | None
+    #: The cadence the sync was set up to keep.
+    interval: timedelta | None = None
+
+    @classmethod
+    def read(cls, path: Path, interval: timedelta | None = None) -> "Transport":
+        """Read the marker: the timestamp inside it, or its mtime failing that.
+
+        *Opened*, not stat-ed, and that is the point. A marker is a file
+        overwritten in place, and on a File Provider mount -- iCloud, Dropbox,
+        Nextcloud on macOS -- a stat describes the placeholder the provider
+        last wrote down rather than the file. It is the same trap ``_doc``
+        sidesteps by reading every singleton on every scan: opening is what
+        makes the provider answer, and a file nobody opens is never fetched.
+
+        Writing the time inside rather than relying on the mtime also survives
+        a transport that rewrites mtimes on the way. An empty marker -- one a
+        plain ``touch`` left -- still works, on its mtime.
+
+        Touches the filesystem, so it belongs in the scan with everything else
+        that can wait on a volume.
+        """
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                # Capped: this is a timestamp, and the file is whatever
+                # somebody's script actually wrote there.
+                stamped = parse.parse_timestamp(handle.read(200))
+        except OSError:
+            return cls(path=path, synced_at=None, interval=interval)
+        if stamped is not None:
+            return cls(path=path, synced_at=stamped, interval=interval)
+        try:
+            synced_at = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
+        except OSError:
+            synced_at = None
+        return cls(path=path, synced_at=synced_at, interval=interval)
+
+    def age(self, now: datetime) -> timedelta | None:
+        return None if self.synced_at is None else now - self.synced_at
+
+    def health(self, now: datetime, grace: timedelta = DEFAULT_GRACE) -> Health:
+        """Whether the link is keeping the cadence it was given.
+
+        ``unknown`` covers both "no marker" and "no declared cadence": absence
+        of a promise is not a broken one, and a marker nobody touches must not
+        make a working channel look dead.
+        """
+        age = self.age(now)
+        if age is None or self.interval is None:
+            return "unknown"
+        if age <= self.interval + grace:
+            return "fresh"
+        return "stale" if age > self.interval * _STALE_FACTOR else "late"
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +367,8 @@ class Snapshot:
     scanned_at: datetime
     heartbeat: Heartbeat | None = None
     status: Status | None = None
+    #: How the folder reaches us, when the config says how to tell.
+    transport: Transport | None = None
     pinned: dict[str, Doc] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)  # inbound, newest first
     threads: list[Thread] = field(default_factory=list)  # outbound, newest first
@@ -309,10 +389,33 @@ class Snapshot:
     def in_flight(self) -> list[Thread]:
         return [t for t in self.threads if t.state != "acked"]
 
-    def health(self, now: datetime | None = None) -> Health:
+    def session_health(self, now: datetime | None = None) -> Health:
+        """What the heartbeat alone says, taking the folder at face value."""
         if not self.heartbeat:
             return "unknown"
         return self.heartbeat.health(now or self.scanned_at, self.grace)
+
+    def link_health(self, now: datetime | None = None) -> Health:
+        """What the transport marker says, or ``unknown`` without one."""
+        if self.transport is None:
+            return "unknown"
+        return self.transport.health(now or self.scanned_at, self.grace)
+
+    def health(self, now: datetime | None = None) -> Health:
+        """The honest verdict, which is not always the heartbeat's.
+
+        A silent folder means a dead session only if the folder is arriving.
+        When the link is overdue and the heartbeat has nothing current to say,
+        the staleness is unexplained rather than damning, and reporting it as
+        ``offline`` keeps the blame where the evidence is. A heartbeat still
+        inside its window is left alone: it was true when it was written, and
+        a link that broke a minute ago has not made it false yet.
+        """
+        now = now or self.scanned_at
+        session = self.session_health(now)
+        if session in {"late", "stale", "unknown"} and self.link_health(now) in {"late", "stale"}:
+            return "offline"
+        return session
 
     def attention(self, now: datetime | None = None, unread: set[str] | None = None) -> bool:
         """Does this channel want a human right now?
@@ -328,7 +431,10 @@ class Snapshot:
         loud = [event for event in self.events if event.kind in LOUD_KINDS]
         if unread is not None:
             loud = [event for event in loud if str(event.path) in unread]
-        return bool(self.waiting or self.health(now) in {"late", "stale"} or loud)
+        # ``offline`` is included: being unable to see a channel is its own
+        # reason to want someone, and the one the folder cannot report itself.
+        wrong = self.health(now) in {"late", "stale", "offline"}
+        return bool(self.waiting or wrong or loud)
 
 
 def _first_ts(*candidates: str | None) -> datetime | None:
