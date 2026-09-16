@@ -53,7 +53,13 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   an event's timestamp: those files are rewritten whole, so it is the same
   fact. A documented key the parser ignores is worse than one nobody
   documented -- the session did as it was told and still went unread.
-- Every write into a channel goes through `compose._atomic_write`.
+- Every write into a channel goes through `compose._atomic_write`, and its
+  temporary is staged at the top of the channel rather than in the folder
+  being written to. Atomic is not invisible: the file a rename comes *from* is
+  a directory entry like any other, and a session woken by the create event
+  lists `inbox/` at exactly that moment. The contract carries the other half
+  -- read only `*.md` entries that do not begin with a dot -- because a sync
+  client leaves temporaries there too and nothing on this side stops it.
 - Nothing that touches a channel's volume runs on the UI thread -- scanning,
   deciding an absence, sending, deleting conflicts. That volume belongs to a
   sync client and answers when it likes; a call that waits on it stops the app
