@@ -39,7 +39,8 @@ belong in `CLAUDE.local.md`, which is not committed.
                              preview.py the reader's bottom pane for a
                              delivered text file, vim.py what a motion means
                              to the focused pane, find.py the in-document
-                             search, mounting.py guards the timed refreshes)
+                             search, mounting.py guards the timed refreshes,
+                             volume.py the threads I/O runs on)
 
 Installed as two console scripts, `inzaghi` and the `inz` alias, both pointing
 at `cli:main`; `cli._prog()` reports whichever name was typed.
@@ -66,6 +67,13 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   Textual's shared pool that ends with sending, deleting and opening dead too,
   until the app is restarted. A request that arrives while a scan is out is
   remembered, not dropped; the rescan after a send has to see the send.
+- Both pools are daemon threads of our own (`ui/volume.py`), because quitting
+  has to be allowed to abandon a read that has wedged. A `ThreadPoolExecutor`
+  never is: `shutdown(wait=False)` declines to wait and then the interpreter
+  joins every worker at exit anyway, long after the screen went back. Textual
+  runs its own `@work(thread=True)` -- sending, opening, the preview's re-read
+  -- on the loop's *default* executor, which `asyncio.run` joins before
+  `App.run` even returns, so the app puts a pool of its own there at mount.
 - A file that is overwritten in place is never trusted to a `stat`. On a File
   Provider mount -- iCloud, Dropbox, Nextcloud on macOS -- `stat` describes the
   placeholder, not the file: the contents are on a server until something opens
