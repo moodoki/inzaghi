@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -28,6 +28,7 @@ from .rows import (
     Row,
     attachment_label,
     build_rows,
+    labels_change_at,
     divider_label,
     filter_bar,
     kind_cycle,
@@ -127,6 +128,12 @@ class ChannelPane(Vertical):
         self._unread: set[str] = set()
         self.filter = Filter()
         self._all_rows: list[Row] = []
+        #: What the rows were built from, and the moment one of their labels
+        #: is next due to read differently. Together they answer "would
+        #: building these again produce anything new".
+        self._built_from: tuple | None = None
+        self._built_at = datetime.max.replace(tzinfo=timezone.utc)
+        self._labels_at = datetime.min.replace(tzinfo=timezone.utc)
         self._rows: list[Row] = []
         self._labels: list[str] = []
         self._signature: list[tuple] = []
@@ -194,11 +201,48 @@ class ChannelPane(Vertical):
             self.update(self.snapshot, self._unread, self.snapshot.scanned_at)
 
     def update(self, snapshot: Snapshot, unread: set[str], now: datetime) -> None:
+        """Take a scan, and rebuild only what the scan actually changed.
+
+        Rows are the expensive part of a poll -- a title parsed, a timestamp
+        formatted and a whole document lowercased, for every entry in the
+        channel, every two seconds. Almost none of it differs from the poll
+        before: the documents are the same objects the cache handed back, and
+        a label carrying "4m ago" says "4m ago" for a minute.
+
+        So the rows are rebuilt when the channel changed or when a label is
+        due to change, and otherwise left alone. What is *not* skipped is the
+        reader: a status file rewritten in place and an attachment that has
+        finished syncing both change what the selected entry holds without
+        changing any row, and the open file is re-read on a timer of its own.
+        """
         self.snapshot = snapshot
         self._unread = unread
         if not composed(self, "#strip"):
             return  # kept, and written out by on_mount above
+        carried = (
+            snapshot.pinned,
+            snapshot.events,
+            snapshot.threads,
+            snapshot.attachments,
+            unread,  # a row read is a label changed, and retires the divider
+        )
+        # ``_built_at <= now`` as well as the staleness moment: a clock that
+        # stepped backwards, or a caller handing over an earlier time, must
+        # rebuild rather than sit on labels written for a later one.
+        if (
+            self._all_rows
+            and carried == self._built_from
+            and self._built_at <= now < self._labels_at
+        ):
+            selected = self._row_for(self._selected) if self._selected else None
+            if selected is not None:
+                self._show(selected)
+            self.update_strip(now)
+            return
+        self._built_from = carried
+        self._built_at = now
         self._all_rows = build_rows(snapshot, unread, now)
+        self._labels_at = labels_change_at(self._all_rows, now)
         self._apply_filter()
         self.update_strip(now)
 

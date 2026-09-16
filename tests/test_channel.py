@@ -324,3 +324,59 @@ def test_an_unchanged_file_keeps_the_document_it_had(channel):
     """Re-reading is about not trusting the stat, not about churning objects."""
     was = channel.scan(now=NOW).pinned["HEARTBEAT.md"]
     assert channel.scan(now=NOW).pinned["HEARTBEAT.md"] is was
+
+
+def test_the_names_a_notification_points_at_are_extracted_once(channel, channel_root, monkeypatch):
+    """Finding them is a regex pass over the whole body and gives the same
+    answer while the text is unchanged; checking them against the folder does
+    not, and stays per scan."""
+    from inzaghi import attach
+
+    extracted: list[str] = []
+    original = attach.refs
+    monkeypatch.setattr(
+        attach, "refs", lambda doc: extracted.append(doc.path.name) or original(doc)
+    )
+    write(
+        channel_root / "notifications" / "2026-09-05_0530_milestone_delivery.md",
+        "# [milestone] Done\n\n[the report](attachments/report.md)\n",
+    )
+
+    channel.scan(now=NOW)
+    first = list(extracted)
+    channel.scan(now=NOW)
+    assert extracted == first, "the same prose was parsed for references twice"
+
+
+def test_a_rewritten_notification_points_where_it_now_says(channel, channel_root):
+    """The cache is held by the parse, so a re-read never answers with the
+    names the old text carried."""
+    path = channel_root / "notifications" / "2026-09-05_0530_milestone_delivery.md"
+    folder = channel_root / "notifications" / "attachments"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "first.md").write_text("# first\n")
+    (folder / "second.md").write_text("# second\n")
+
+    write(path, "# [milestone] Done\n\n[one](attachments/first.md)\n")
+    found = channel.scan(now=NOW).attachments
+    assert [a.name for a in next(iter(found.values()))] == ["first.md"]
+
+    write(path, "# [milestone] Done\n\n[two](attachments/second.md)\n")
+    found = channel.scan(now=NOW).attachments
+    assert [a.name for a in next(iter(found.values()))] == ["second.md"]
+
+
+def test_an_attachment_that_lands_later_is_still_noticed(channel, channel_root):
+    """What is *not* cached: whether the names are on disk."""
+    write(
+        channel_root / "notifications" / "2026-09-05_0530_milestone_delivery.md",
+        "# [milestone] Done\n\n[late](attachments/late.md)\n",
+    )
+    (late,) = next(iter(channel.scan(now=NOW).attachments.values()))
+    assert late.arrival == "syncing"
+
+    folder = channel_root / "notifications" / "attachments"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "late.md").write_text("# late\n")
+    (landed,) = next(iter(channel.scan(now=NOW).attachments.values()))
+    assert landed.arrival == "here"

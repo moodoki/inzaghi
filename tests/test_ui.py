@@ -1146,3 +1146,84 @@ async def test_a_letter_in_the_search_box_is_a_letter(channel_root):
         await pilot.pause()
         await pilot.press("s", "h", "a", "r", "d", "j", "k", "g")
         assert app.screen.query_one("#search", Input).value == "shardjkg"
+
+
+# -- not recomputing what did not change ----------------------------------
+
+
+async def test_the_tick_does_not_walk_the_events_again(channel_root, monkeypatch):
+    """Receipts are only ever written here, so the answer cannot go stale on
+    its own -- and walking every event of every channel to redraw a number
+    that did not change is the tick's whole cost at size."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        walks: list[str] = []
+        original = app.state.unread
+        monkeypatch.setattr(
+            app.state, "unread", lambda key, snap: walks.append(key) or original(key, snap)
+        )
+
+        app._tick()
+        app._tick()
+        await pilot.pause()
+        assert walks == [], "the tick recomputed the unread sets"
+
+
+async def test_marking_read_is_seen_by_the_next_tick(channel_root):
+    """The cache must not outlive its truth."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        key = str(channel_root)
+        assert app._unread_paths()[key], "nothing was unread to begin with"
+
+        await pilot.press("a")  # mark all read
+        await settle(app, pilot)
+        assert app._unread_paths()[key] == set()
+
+
+async def test_the_footer_is_not_recomposed_on_an_unchanged_poll(channel_root, monkeypatch):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        # The conflict key belongs to the channel in front, so be in front of one.
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+        refreshes: list[int] = []
+        monkeypatch.setattr(
+            type(app), "refresh_bindings", lambda self: refreshes.append(1)
+        )
+
+        app.rescan()
+        await settle(app, pilot)
+        assert refreshes == [], "the footer was recomposed for a poll that changed nothing"
+
+        write(
+            channel_root / "notifications" / "STATUS (conflicted copy 2026-09-05).md",
+            "# status\n",
+        )
+        app.rescan()
+        await settle(app, pilot)
+        assert refreshes, "a conflict appearing did not refresh the bindings"
+
+
+async def test_the_tick_redraws_the_pane_in_front_only(channel_root, tmp_path):
+    """A Static.update is a relayout of the whole screen; the panes behind the
+    one on screen are redrawn when their tab comes up."""
+    from inzaghi.protocol import init_channel
+
+    roots = [channel_root, init_channel(tmp_path / "southwind").channel.root]
+    app = channels_only_app(*roots)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+
+        strips: list[str] = []
+        for pane in app.query(ChannelPane):
+            pane.update_strip = lambda now, name=pane.channel.name: strips.append(name)
+
+        app._tick()
+        await pilot.pause()
+        assert strips == [channel_root.name], f"redrew panes that are not on screen: {strips}"
