@@ -159,6 +159,10 @@ class InzaghiApp(App):
         #: Set once the app is going away, so that a timer which fires during
         #: teardown does not hand work to a pool that has been shut down.
         self._closing = False
+        #: Files whose read is out, as ``(channel key, attachment name)``. A
+        #: poll that finds one already reading leaves it alone; see
+        #: ``_open_attachment``.
+        self._reading: set[tuple[str, str]] = set()
         #: The half-typed key sequence, if there is one, and the timer that
         #: gives up on it.
         self._pending: str | None = None
@@ -583,26 +587,45 @@ class InzaghiApp(App):
         else is handed to the desktop. Both wait on the channel's volume, so
         both leave the UI thread here.
         """
-        if event.attachment.disposition == "read":
-            self._read_attachment(event.channel_key, event.attachment, event.refresh)
-        else:
+        if event.attachment.disposition != "read":
             self._launch(event.attachment)
+            return
+        reading = (event.channel_key, event.attachment.name)
+        if event.refresh and reading in self._reading:
+            # A poll asking again for a file whose last read has not come
+            # back. Dropped rather than remembered: the poll *is* the retry,
+            # because the stamp it compares against is only updated by a read
+            # that landed. Someone pressing enter is never dropped -- that is
+            # a fresh intention, and it moves the keyboard as well.
+            return
+        self._reading.add(reading)
+        self._read_attachment(event.channel_key, event.attachment, event.refresh)
 
     @work(thread=True, group="open")
     def _read_attachment(self, key: str, attachment: Attachment, refresh: bool) -> None:
         """Read a text delivery off the UI thread.
 
-        Not ``exclusive``: a poll can ask for a re-read while an earlier one is
-        still waiting on the sync client, and cancelling the earlier one would
-        leave whichever pane asked first showing text it has been told is
-        stale. Both land; the pane ignores the one it no longer wants.
+        Not ``exclusive``, because cancelling a read that is on its way back
+        would leave the pane showing text it has been told is stale -- but not
+        unbounded either. Bounded by ``_reading`` in the caller above, which is
+        the same shape as the scan's ``_scanning``: one read out per open file,
+        and the poll asks again. Without that, a read wedged inside a sync
+        client takes a new thread every two seconds until the pool is full and
+        sending stops -- the failure ``d075d7c`` removed from the scan.
         """
         try:
             text, truncated = attach.read_text(attachment)
         except attach.CannotOpen as exc:
             self.call_from_thread(self.notify, str(exc), severity="error", timeout=20)
-            return
-        self.call_from_thread(self._previewed, key, attachment, text, truncated, refresh)
+        else:
+            self.call_from_thread(self._previewed, key, attachment, text, truncated, refresh)
+        finally:
+            # Last, and in a ``finally``. Last, because the stamp the next poll
+            # compares against is written by ``_previewed`` -- clearing the
+            # flag first leaves a gap in which a poll asks again for text that
+            # has already arrived. In a ``finally``, because a read that failed
+            # must not stop the file being read ever again.
+            self.call_from_thread(self._reading.discard, (key, attachment.name))
 
     def _previewed(
         self, key: str, attachment: Attachment, text: str, truncated: bool, refresh: bool
