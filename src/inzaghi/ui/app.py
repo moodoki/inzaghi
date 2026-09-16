@@ -664,7 +664,20 @@ class InzaghiApp(App):
             # flag first leaves a gap in which a poll asks again for text that
             # has already arrived. In a ``finally``, because a read that failed
             # must not stop the file being read ever again.
-            self.call_from_thread(self._reading.discard, (key, attachment.name))
+            self.call_from_thread(self._finished_reading, key, attachment.name)
+
+    def _finished_reading(self, key: str, name: str) -> None:
+        """Let go of the in-flight flag for one open file, on the UI thread.
+
+        A method of our own rather than ``self._reading.discard`` handed over
+        directly. Textual counts a callback's parameters before invoking it,
+        and it counts them with ``inspect.signature`` -- which a built-in
+        bound method has none of. ``set.discard`` raises ``ValueError`` there
+        instead of running, so the flag is never cleared and the guard above
+        refuses every later poll: the file stops being re-read for the life of
+        the process, which is the failure the guard was added to prevent.
+        """
+        self._reading.discard((key, name))
 
     def _previewed(
         self, key: str, attachment: Attachment, text: str, truncated: bool, refresh: bool
