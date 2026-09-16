@@ -58,6 +58,13 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   deciding an absence, sending, deleting conflicts. That volume belongs to a
   sync client and answers when it likes; a call that waits on it stops the app
   redrawing. `tests/test_ui.py` asserts the thread, not the timing.
+- Anything that re-fires on the poll needs an in-flight guard, not just the
+  scan. The preview's re-read did not have one: the stamp it compares against
+  is written only by a read that *landed*, so a read wedged inside a sync
+  client took a new thread every two seconds until the pool was full and
+  sending stopped. `app._reading` bounds it to one read per open file, and the
+  poll is the retry -- dropped rather than remembered, because the comparison
+  that asked will ask again. A read someone asked for by hand is never dropped.
 - The scan and the discovery sweep get a pool of their own (`VOLUME_THREADS`),
   and only one of each is ever in flight. A read that has blocked inside a
   sync client cannot be cancelled, only waited for: cancelling the worker

@@ -924,3 +924,102 @@ async def test_escape_closes_the_file_and_hands_the_keyboard_back(read_here):
         await pilot.pause()
         assert pane.preview.display is False
         assert strip(app).has_focus  # where it was opened from
+
+
+# -- one read at a time ---------------------------------------------------
+
+
+async def test_a_wedged_read_does_not_take_a_thread_every_poll(read_here, monkeypatch):
+    """Reported by a review, and the same failure d075d7c removed from the scan.
+
+    ``_follow_preview`` asks again on every poll once the file on screen is
+    older than CACHE_SECONDS, and the stamp it compares against is only written
+    by a read that *landed*. Without a guard, a read wedged inside a sync client
+    takes a new thread every two seconds until the pool is full -- and then
+    sending, which shares that pool, stops.
+    """
+    wedged = threading.Event()
+    reads: list[str] = []
+
+    def blocks(attachment, **kwargs):
+        reads.append(attachment.name)
+        wedged.wait(timeout=10)
+        return "text that arrived eventually\n", False
+
+    app = make_app(read_here)
+    async with app.run_test() as pilot:
+        pane = await open_file(app, pilot, index=1)
+        assert pane.preview.showing_name == "tail.txt"
+
+        with mock.patch("inzaghi.ui.app.attach.read_text", blocks):
+            for _ in range(5):  # five polls' worth of asking
+                pane.post_message(
+                    ChannelPane.Open(pane.channel.key, pane._attachments[1], refresh=True)
+                )
+                await pilot.pause()
+
+            assert len(reads) == 1, f"a read per poll: {len(reads)}"
+
+            # And the pool is still free for the thing that matters.
+            sent: list[str] = []
+            app._write(pane.channel, lambda: sent.append("written") or Path("x.md"))
+            await pilot.pause()
+            for _ in range(40):
+                if sent:
+                    break
+                await pilot.pause(0.05)
+            assert sent == ["written"], "a send queued behind the wedged read"
+
+            wedged.set()
+        await settle(app, pilot)
+
+
+async def test_the_next_poll_reads_again_once_the_last_one_landed(read_here):
+    """The guard bounds the reads in flight; it must not stop them happening."""
+    app = make_app(read_here)
+    async with app.run_test() as pilot:
+        pane = await open_file(app, pilot, index=1)
+        assert app._reading == set(), "the flag outlived the read that set it"
+
+        (read_here / "notifications" / "attachments" / "tail.txt").write_text(
+            "".join(f"worker-2 line {i}: shard {i % 5} ok\n" for i in range(41))
+        )
+        app.rescan()
+        await settle(app, pilot)
+        assert "line 40" in pane.preview.text
+        assert app._reading == set()
+
+
+async def test_a_read_that_failed_leaves_the_file_readable(read_here):
+    """A failure that left the flag set would make the file unreadable until
+    the tab was closed."""
+    app = make_app(read_here)
+    async with app.run_test() as pilot:
+        pane = await open_file(app, pilot, index=1)
+        with mock.patch(
+            "inzaghi.ui.app.attach.read_text", side_effect=attach.CannotOpen("no")
+        ):
+            pane.post_message(
+                ChannelPane.Open(pane.channel.key, pane._attachments[1], refresh=True)
+            )
+            await settle(app, pilot)
+        assert app._reading == set()
+
+
+async def test_pressing_enter_is_never_dropped(read_here):
+    """Only a poll's re-read is bounded. Asking for a file is a fresh
+    intention, and it moves the keyboard as well."""
+    app = make_app(read_here)
+    async with app.run_test() as pilot:
+        pane = await open_file(app, pilot, index=1)
+        app._reading.add((pane.channel.key, "tail.txt"))  # as if one were out
+        reads: list[str] = []
+
+        def watched(attachment, **kwargs):
+            reads.append(attachment.name)
+            return "asked for\n", False
+
+        with mock.patch("inzaghi.ui.app.attach.read_text", watched):
+            pane.post_message(ChannelPane.Open(pane.channel.key, pane._attachments[1]))
+            await settle(app, pilot)
+        assert reads == ["tail.txt"]
