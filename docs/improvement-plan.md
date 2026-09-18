@@ -2,8 +2,8 @@
 
 Phases 0 to 5 come from a performance review; 6 and 7 from the issue tracker.
 
-**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 is open as #15.
-Phases 3 to 5 are approved and not started. Phases 6 and 7 are written up here
+**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 as #15.
+Phase 3 is open as #17, phase 4 as #18, and phase 5 on `window-the-timeline`. Phases 6 and 7 are written up here
 for the first time and need the decisions each one names. Two standing targets —
 more harnesses, and the effect of the model behind them — sit at the end; they
 are lenses on the phases rather than work with an end.
@@ -245,6 +245,11 @@ materialised options.
 Touches `_render_rows`, `_row_for`, `_retitle` and `_index_of`; the unread divider
 needs a clipped position with a count when the boundary falls outside the window.
 Cursor restore by option id is unchanged.
+*Done:* the window is stretched to hold the cursor, so a key restored from
+outside it still has an option to sit on; it closes again when the filter
+changes and not when a message arrives; and `G` goes through a `Timeline`
+subclass overriding `action_last`, which is the only place a `ui.vim` motion is
+overridden and keeps the rest of the table widget-agnostic.
 *Tests:* a 3000-row fixture materialises `K + chrome` options; selecting the last
 option extends the window; a filter matching an old row shows it; the divider
 reports the right count when clipped.
