@@ -6,7 +6,7 @@ import pytest
 from textual.widgets import Input, OptionList, TabbedContent
 
 from conftest import NOW, write
-from inzaghi.ui.channel_view import ChannelPane
+from inzaghi.ui.channel_view import DEBOUNCE_SECONDS, ChannelPane
 from inzaghi.ui.rows import ALL, Filter, build_rows, filter_bar, kind_cycle
 from test_ui import make_app, settle
 
@@ -78,15 +78,23 @@ def test_filter_bar_shows_the_query(rows):
 
 
 async def search_for(pilot, query: str) -> None:
-    """Open the search box and type into it.
+    """Open the search box, type into it, and wait for the rows to catch up.
 
-    The pause matters: until the input has focus, the letters are still app
-    bindings -- "s" would send STATUS to the channel rather than filtering it.
+    The first pause matters: until the input has focus, the letters are still
+    app bindings -- "s" would send STATUS to the channel rather than filtering
+    it. The last one matters because the rebuild is debounced; the query is on
+    the pane the moment it is typed, but the rows it selects are not.
     """
     await pilot.press("slash")
     await pilot.pause()
     for key in query:
         await pilot.press(key)
+    await filtered(pilot)
+
+
+async def filtered(pilot) -> None:
+    """Wait out the search debounce, with room for a slow machine."""
+    await pilot.pause(DEBOUNCE_SECONDS * 3)
     await pilot.pause()
 
 
@@ -115,7 +123,7 @@ async def test_shift_f_cycles_backwards(channel_root):
         assert pane.filter.kind == kind_cycle(pane._all_rows)[-1]
 
 
-async def test_slash_opens_search_and_typing_filters_live(channel_root):
+async def test_slash_opens_search_and_typing_filters(channel_root):
     app = make_app(channel_root)
     async with app.run_test() as pilot:
         pane = await open_channel(app, pilot)
@@ -124,9 +132,50 @@ async def test_slash_opens_search_and_typing_filters_live(channel_root):
         assert app.screen.query_one("#search", Input).display is True
         for key in "shard":
             await pilot.press(key)
-        await pilot.pause()
-        assert pane.filter.query == "shard"
+        assert pane.filter.query == "shard"  # the query lands on the keystroke
+        await filtered(pilot)
         assert all("shard" in row.text for row in pane._rows)
+
+
+async def test_a_typed_word_costs_one_rebuild_not_one_per_letter(channel_root, monkeypatch):
+    """Five letters, one pass over the rows -- the four nobody sees are skipped."""
+    app = make_app(channel_root, poll_seconds=30)
+    async with app.run_test() as pilot:
+        pane = await open_channel(app, pilot)
+        applied = []
+        original = ChannelPane._apply_filter
+        monkeypatch.setattr(
+            ChannelPane,
+            "_apply_filter",
+            lambda self: (applied.append(self.filter.query), original(self))[1],
+        )
+        await pilot.press("slash")
+        await pilot.pause()
+        # Typed by setting the value rather than through ``pilot.press``: a
+        # simulated keypress is a round trip through the event loop and takes
+        # longer than the debounce all by itself, which no typist does.
+        search = app.screen.query_one("#search", Input)
+        for length in range(1, len("shard") + 1):
+            search.value = "shard"[:length]
+        await pilot.pause()
+        assert applied == []  # nothing yet: the typing has not stopped
+        await filtered(pilot)
+        assert applied == ["shard"]
+        assert all("shard" in row.text for row in pane._rows)
+
+
+async def test_a_poll_landing_mid_word_filters_by_what_is_typed_so_far(channel_root):
+    """The debounce may be cut short, but never by a filter out of date."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        pane = await open_channel(app, pilot)
+        await pilot.press("slash")
+        await pilot.pause()
+        for key in "sha":
+            await pilot.press(key)
+        app.rescan()
+        await settle(app, pilot)
+        assert all("sha" in row.text for row in pane._rows)
 
 
 async def test_enter_hides_the_box_but_keeps_the_search(channel_root):
