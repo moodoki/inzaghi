@@ -130,6 +130,26 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   longer than a second to mount, and removing a tab frees a pane's children
   before the pane. Guard every one with `ui.mounting.composed`, in the app as
   well as in each pane; do not query and hope.
+- One `lstat` answers everything a reference needs: whether it is a link,
+  whether it is a regular file, and how big and when. `is_symlink()` then
+  `stat()` asked the volume twice about the same inode, and `_inside` walked
+  both the path and the folder to the root on top -- per reference, per scan.
+  Containment now comes from reasoning where it can: a name that survived
+  `_lexical_refusal` is relative with no `..`, so a *flat* one cannot leave
+  the folder unless its leaf is a link, which the `lstat` has just ruled out.
+  A name with directories in it still gets the walk, because a symlinked
+  component in the middle is the one way out that reasoning cannot close.
+- The directory listing hands on the `stat` it already took. `scandir` needs
+  it to decide a file is a file, and `_doc` wanted the same four numbers a
+  moment later; on a File Provider mount each of those is a round trip.
+  Anything that lies to a stat must now lie to the listing too -- which is
+  what the tests simulating a frozen stat do.
+- The `CACHE_SECONDS` expiry is for files that might still be rewritten: the
+  three overwritten singletons, which are re-read unconditionally anyway, and
+  any entry touched within `SETTLED_SECONDS`. The rest of the log is
+  append-only by contract -- a new entry is a new path, and a new path is
+  always read -- so a settled parse is kept while its fingerprint agrees.
+  Re-reading all of it every minute cost a cold scan per channel per minute.
 - An attachment exists only because a notification references it; a bare file
   in `notifications/attachments/` is invisible on purpose. Resolution happens
   per scan, never in the `Doc` cache: the prose does not change when the

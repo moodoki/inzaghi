@@ -783,8 +783,17 @@ async def test_an_open_file_is_not_believed_for_ever(read_here):
         def lying(self, **kwargs):
             return frozen if self == payload else real_stat(self, **kwargs)
 
+        # Both calls, because a delivery is fingerprinted with one lstat and a
+        # notification is read with a stat: the provider would lie to either.
+        real_lstat = os.lstat
+
+        def lying_lstat(target, **kwargs):
+            return frozen if Path(target) == payload else real_lstat(target, **kwargs)
+
         deliver(read_here, "shard-3-notes.md", b"# Shard 3\n\nChecksums verified twice.\n")
-        with mock.patch.object(Path, "stat", lying):
+        with mock.patch.object(Path, "stat", lying), mock.patch.object(
+            attach.os, "lstat", lying_lstat
+        ):
             app.rescan()
             await settle(app, pilot)
             assert "verified twice" not in rendered(app), "the stat told the truth"
@@ -1023,3 +1032,81 @@ async def test_pressing_enter_is_never_dropped(read_here):
             pane.post_message(ChannelPane.Open(pane.channel.key, pane._attachments[1]))
             await settle(app, pilot)
         assert reads == ["tail.txt"]
+
+
+# -- what a reference costs to check --------------------------------------
+
+
+def syscalls_for(folder: Path, doc: Doc, monkeypatch) -> dict[str, list[str]]:
+    """Every filesystem question asked while resolving one document."""
+    asked: dict[str, list[str]] = {"lstat": [], "stat": [], "resolve": []}
+    real_lstat, real_stat, real_resolve = os.lstat, os.stat, Path.resolve
+    monkeypatch.setattr(
+        attach.os, "lstat", lambda t, **k: asked["lstat"].append(str(t)) or real_lstat(t, **k)
+    )
+    monkeypatch.setattr(
+        attach.os, "stat", lambda t, **k: asked["stat"].append(str(t)) or real_stat(t, **k)
+    )
+    monkeypatch.setattr(
+        Path, "resolve", lambda self, **k: asked["resolve"].append(str(self)) or real_resolve(self, **k)
+    )
+    attach.resolve(folder, doc)
+    return asked
+
+
+def test_a_plain_reference_costs_one_question(channel_root, monkeypatch):
+    """It was nineteen: a symlink check, a stat, and both sides of the path
+    walked to the root -- per reference, per scan, on a mount where each one
+    is a round trip to a sync client."""
+    deliver(channel_root, "report.md", b"# report\n")
+    folder = channel_root / "notifications" / "attachments"
+    asked = syscalls_for(folder, doc("[r](attachments/report.md)"), monkeypatch)
+
+    assert len(asked["lstat"]) == 1, asked["lstat"]
+    assert asked["stat"] == []
+    assert asked["resolve"] == [], "the path was walked to the root"
+
+
+def test_a_reference_with_directories_in_it_is_still_walked(channel_root, monkeypatch):
+    """The one shape that can leave the folder without the leaf being a link."""
+    folder = channel_root / "notifications" / "attachments"
+    (folder / "sub").mkdir(parents=True, exist_ok=True)
+    (folder / "sub" / "report.md").write_text("# report\n")
+    asked = syscalls_for(folder, doc("[r](attachments/sub/report.md)"), monkeypatch)
+
+    assert asked["resolve"], "a nested name was not checked for containment"
+
+
+def test_a_symlinked_directory_in_the_middle_is_refused(channel_root, tmp_path):
+    """The leaf is an ordinary file; the directory holding it is the way out."""
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "report.md").write_text("not yours\n")
+    folder = channel_root / "notifications" / "attachments"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "sub").symlink_to(outside)
+
+    announce(channel_root, "# [milestone] Done\n\n[r](attachments/sub/report.md)\n")
+    (found,) = only(Channel(root=channel_root).scan(now=NOW))
+    assert (found.arrival, found.problem) == ("refused", "refused: outside the channel")
+
+
+def test_the_cheap_path_still_refuses_what_it_always_did(channel_root, tmp_path):
+    """The whole point of the whitelist: fewer questions, same answers."""
+    secret = tmp_path / "outside.md"
+    secret.write_text("not yours\n")
+    folder = channel_root / "notifications" / "attachments"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "link.md").symlink_to(secret)
+    (folder / "adir").mkdir()
+
+    announce(
+        channel_root,
+        "# [milestone] Done\n\n[a](attachments/link.md)\n[b](attachments/adir)\n"
+        "[c](attachments/../../etc/passwd)\n[d](attachments/gone.md)\n",
+    )
+    found = {a.name: a for a in only(Channel(root=channel_root).scan(now=NOW))}
+    assert found["link.md"].problem == "refused: a symlink"
+    assert found["adir"].problem == "refused: not a file"
+    assert found["../../etc/passwd"].problem == "refused: outside the channel"
+    assert (found["gone.md"].arrival, found["gone.md"].problem) == ("syncing", "")
