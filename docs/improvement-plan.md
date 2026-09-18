@@ -1,7 +1,17 @@
-# Performance review and improvement plan
+# Improvement plan
 
-Reviewed on branch `rsync-transport` at `b9abed5` (main plus the unmerged transport
-work), full suite green at 375 passed. Three reviews ran in parallel against
+Phases 0 to 5 come from a performance review; 6 and 7 from the issue tracker.
+
+**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 is open as #15.
+Phases 3 to 5 are approved and not started. Phases 6 and 7 are written up here
+for the first time and need the decisions each one names. Two standing targets —
+more harnesses, and the effect of the model behind them — sit at the end; they
+are lenses on the phases rather than work with an end.
+
+## The review
+
+Reviewed on branch `rsync-transport` at `b9abed5` (main plus the then-unmerged
+transport work), full suite green at 375 passed. Three reviews ran in parallel against
 synthetic fixtures on local ext4 — filesystem I/O, UI-thread cost, and the
 concurrency model. The live channels under `~/sync` were never read.
 
@@ -27,7 +37,8 @@ sentence:
 
 None of it is a cliff. All of it is linear in the number of messages, and the
 knee is at **N ≈ 500–700 notifications per channel**: below that the app is
-janky, above it every poll is a ≥100 ms freeze. udang is at 183 and growing.
+janky, above it every poll is a ≥100 ms freeze. BRAVO, the largest channel
+watched here, is at 183 and growing.
 
 Two things make it feel worse than the arithmetic suggests.
 
@@ -96,9 +107,9 @@ of the proposals below weakens it.
 ## The plan
 
 Ordered so that each phase is worth doing on its own, and nothing later depends on
-a judgement call made earlier. All five phases are approved; each lands as its own
-branch and pull request, so the bug fix can merge without waiting for the
-performance work.
+a judgement call made earlier. Each lands as its own branch and pull request, so
+the bug fix could merge without waiting for the performance work — and so the two
+issue-driven phases at the end need not wait for any of it.
 
 ### Phase 0 — the bug (half a day)
 
@@ -237,6 +248,170 @@ Cursor restore by option id is unchanged.
 *Tests:* a 3000-row fixture materialises `K + chrome` options; selecting the last
 option extends the window; a filter matching an old row shows it; the divider
 reports the right count when clipped.
+
+## From the issue tracker
+
+Two open issues, folded in here so the work sits in one order. Neither is
+performance: #14 is about a channel telling the truth when the session behind it
+stops, #12 is a missing half of the contract. They are sequenced after the
+measured phases because those are in flight, not because they matter less — #14
+in particular is the kind of fault that makes every other signal untrustworthy.
+
+### Phase 6 — a heartbeat that outlives the agent's turn (issue #14)
+
+**What the issue says.** Under Claude Code the heartbeat stops when a usage limit
+is reached, and a stopped heartbeat is indistinguishable from a dead session. It
+asks for the heartbeat to keep going, and for the reason and the reset time to be
+said out loud. It also notes this does not always happen: some sessions run a
+monitor that does not use the model at all.
+
+**Evidence from this machine, 2026-09-18 14:20.** BRAVO went six minutes past
+its deadline while its session was healthy and mid-turn — editing run scripts,
+auto mode on, three monitors up. Two messages sat unread in its inbox for the
+same reason: a session reads its inbox *between* turns, and writes its heartbeat
+there too, so one long turn stops both. ECHO never lapses, because its heartbeat
+is written by a shell loop bound to the harness process, needing no model at all.
+
+Codenames throughout: the mapping is local, for the reason in `CLAUDE.md`. The same divide will be visible in any harness: a heartbeat
+driven by the agent's loop is a heartbeat that reports on the agent's loop, not
+on the session.
+
+So the fault is not "the model stopped" but "the only writer of liveness was the
+thing that stopped". Three parts, and the first is most of the value:
+
+**6.1 The skill says to run the heartbeat off something that is not the model.**
+A timer, a cron line, a `while` loop — anything that keeps writing while the
+agent is thinking, paused, rate-limited or waiting on a human. The contract
+already asks for a heartbeat "independent of whatever job is running"; it has to
+say independent of the *agent* too, and give a worked example, because the
+sessions that get this right today are the ones that happened to build a timer.
+
+**6.2 A paused session can say so, and Inzaghi can show it.** Add a front-matter
+key the contract advertises — `paused_until`, with the reason in `state:` — so a
+session that hits a limit writes one line before it goes quiet. The viewer then
+has a third state between *fresh* and *stale*: **paused, resumes 15:40**, which is
+not an alarm. Today the same silence means three different things — dead, wedged,
+and rate-limited — and the watcher cannot separate them.
+
+**6.3 The timer writes it, not the agent.** If 6.1 lands, the timer is the writer
+and the agent only supplies `state:` when it has something to say. That also
+fixes BRAVO's case above, which has nothing to do with usage limits: a long turn
+stops being a liveness event at all.
+
+*Decisions this needs:* whether the viewer gains a paused state (it changes what
+the `◍`/`○` marks mean and what `attention()` counts), and whether the contract
+*requires* an independent writer or merely recommends one. Requiring it makes
+every existing session non-compliant until it is updated.
+
+### Phase 7 — the inbox carries attachments (issue #12)
+
+**What the issue says.** A session can deliver files with a notification; we
+cannot send any back. The composer takes text and nothing else, so a log excerpt
+too long to paste, a config to apply, or a screenshot of what went wrong has no
+way across. It proposes `inbox/attachments/` on the same terms as the outbound
+folder, filled by the composer, with the path **copied and the link rewritten**
+rather than merely mentioned — because a path that means something here means
+nothing on the machine that reads it, and the session cannot tell a reference
+that was never going to resolve from a payload that has not synced yet.
+
+**Why this is mostly assembly.** The inbound half is built and none of it is
+inbound-specific except the folder it is pointed at: `attach.refs` pulls
+references out of a `Doc`, `attach.resolve` checks them against a folder, and a
+referenced file that has not landed reads as *syncing*. `compose._unique` already
+disambiguates a name that exists. `compose._atomic_write` already stages outside
+the folder being written to, which a copied payload needs as much as a message
+does. The work is the composer, the contract, and the ordering.
+
+**7.1 Attaching from the composer.** A paste whose text is a path, which is what
+a terminal gives you when a file is dropped on it, and a key that asks for a path
+for when there is nothing to drag. Both end in the same place, and both need the
+same answers for a path that is not real, is a directory, or cannot be read.
+
+**7.2 Copy, then rewrite.** Copy into `inbox/attachments/`, rewrite the link to
+point at the copy relative to the folder, leave the rest of the prose alone.
+
+**7.3 The contract has to say it exists**, in `protocol.CHANNEL_README` and the
+skill, or a session will never look. The drift test and `inz skill sync` keep the
+two in step.
+
+**7.4 Ordering, and the payload's afterlife.** The payload must land before the
+message that names it — the mirror of the inbound *syncing* state, except the
+session is not Inzaghi and will not wait politely, so the contract should say
+what it must do when a named file is missing. And `transport.retire` deletes a
+local message once it appears in `done/`; nothing currently retires the payload
+it named.
+
+*Decisions this needs:* whether the contract tells a session to *wait* for a
+named file or to act and note the absence; whether outbound copying takes a size
+ceiling and what it is (a screenshot is the point, a 4 GB core dump on a sync
+volume is not); and whether a payload is retired with its message or left.
+
+---
+
+## Standing targets
+
+Not phases: these have no finish line, and each is a lens to judge the phases
+above by rather than a thing to build once.
+
+### More harnesses than the one it grew up in
+
+Today's spread is six Claude Code sessions and one opencode session, against a
+skill installer that knows two harnesses:
+
+| harness | installs to | exercised by |
+|---|---|---|
+| `claude-code` | `~/.claude/skills`, `.claude/skills` | six live channels |
+| `antigravity` | `~/.gemini/config/skills`, `.agents/skills` | nothing yet |
+| opencode | — not in `skill.py` | GOLF, reached some other way |
+| codex | — not supported | — |
+
+Two of those rows are the interesting ones. **Antigravity is supported and
+unexercised**, so we know the install path works and nothing else. **opencode is
+unsupported and working**, which is the more useful fact: a channel written by a
+harness the installer has never heard of still satisfies the contract, which is
+evidence the protocol is genuinely harness-neutral rather than Claude Code's
+conventions with a folder around them. Adding **codex** is the test of whether
+that holds for a third shape of instruction file.
+
+Supporting a harness is two different sizes of job, and `skill.py` only does the
+small one. The small one is a `HARNESSES` entry: where the skill goes and what
+wrapper the front matter needs. The large one is what the harness can *do* — and
+that is where this meets issue #14. A harness that can hold a background timer
+can keep a heartbeat alive while the model is rate-limited, paused or thinking;
+one that can only act inside a turn cannot, and the contract must then ask it for
+something else. Whether that distinction is real, and which harness falls on
+which side, is a question in front of the analysis now running.
+
+So the target is not "support more harnesses" but: **for each harness, what can
+it promise?** A table of that is worth more than another installer entry.
+
+### Different models behind the same instructions
+
+Everything in this protocol is prose. It is read by whatever model the session is
+running, and the same paragraph does not land the same way twice — the sessions
+here have already interpreted the same skill differently, which is what the
+current analysis is measuring.
+
+Worth tracking deliberately rather than discovering:
+
+- **Whether a weaker or cheaper model can run a channel.** A channel costs a
+  wakeup's worth of reading and writing every thirty minutes, forever. If that
+  only works on a frontier model, the protocol is more expensive than it looks;
+  if a small model can keep a channel honest, an unattended run gets much
+  cheaper to watch.
+- **Which instructions survive a weaker reader.** The parts that need judgement —
+  "say what the file *is*, not 'see attached'", deciding when something is a
+  `hard-stop` — are the parts that will degrade first. The mechanical parts, like
+  the filename shape, should not degrade at all. Where a rule turns out to need
+  judgement, that is an argument for making it mechanical.
+- **What a model does when the contract is silent.** The gaps are filled
+  differently by different readers, and every gap the analysis finds is a place
+  where the model, not the protocol, is deciding what the watcher sees.
+
+Neither of these has an owner or a date. They belong here so that a phase which
+assumes one harness, or one model's reading, is caught while it is still a plan.
+
+---
 
 ### Considered and deferred
 
