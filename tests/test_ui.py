@@ -436,6 +436,153 @@ async def test_a_poll_never_overtakes_the_scan_before_it(channel_root):
     assert len(scans) == 2
 
 
+async def test_the_poll_does_not_queue_behind_the_scan_it_found_running(channel_root):
+    """The poll is its own retry, so its request is dropped rather than kept.
+
+    A sweep that outran the interval used to come back to a flag set by every
+    tick that had passed, and start again immediately: on a volume that is
+    slow because something is hammering it, a reader asking without a pause.
+    The next tick is along within ``poll_seconds`` and asks again.
+    """
+    config = Config(
+        channels=[ChannelSpec(path=channel_root, name=channel_root.name)],
+        poll_seconds=60.0,  # only the scans this test asks for itself
+    )
+    app = InzaghiApp(config)
+    held = threading.Event()
+    scans: list[str] = []
+    real_scan = channel_module.Channel.scan
+
+    def watched(self, now=None):
+        scans.append(self.name)
+        held.wait(10)
+        return real_scan(self, now=now)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        with mock.patch.object(channel_module.Channel, "scan", watched):
+            app.rescan()
+            await pilot.pause()
+            app._poll()  # three ticks going by while the volume does not answer
+            app._poll()
+            app._poll()
+            await pilot.pause()
+            assert len(scans) == 1
+
+            held.set()
+            await settle(app, pilot)
+            await settle(app, pilot)
+
+    assert len(scans) == 1  # nothing followed it: the interval will ask again
+
+
+async def test_a_write_still_gets_its_rescan_after_a_poll_asked_too(channel_root):
+    """A poll's request being dropped must not take a send's with it."""
+    config = Config(
+        channels=[ChannelSpec(path=channel_root, name=channel_root.name)],
+        poll_seconds=60.0,
+    )
+    app = InzaghiApp(config)
+    held = threading.Event()
+    scans: list[str] = []
+    real_scan = channel_module.Channel.scan
+
+    def watched(self, now=None):
+        scans.append(self.name)
+        held.wait(10)
+        return real_scan(self, now=now)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        with mock.patch.object(channel_module.Channel, "scan", watched):
+            app.rescan()
+            await pilot.pause()
+            app._poll()
+            app.rescan()  # what a send asks for
+            app._poll()
+            await pilot.pause()
+            assert len(scans) == 1
+
+            held.set()
+            await settle(app, pilot)
+            await settle(app, pilot)
+
+    assert len(scans) == 2
+
+
+# -- a channel that will not be read --------------------------------------
+#
+# One channel failing is one channel's news. The scan worker runs with
+# Textual's ``exit_on_error``, so an exception that leaves it closes the app
+# on the way past -- six other channels included.
+
+
+async def test_a_channel_whose_scan_raises_does_not_take_the_app_down(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        key = app.channels[0].key
+        before = app.snapshots[key]
+
+        with mock.patch.object(
+            channel_module.Channel, "scan", side_effect=ValueError("a title with no date")
+        ):
+            app.rescan()
+            await settle(app, pilot)
+
+        assert app.is_running
+        kept = app.snapshots[key]
+        assert kept.events == before.events  # the last good read is still on screen
+        assert any("a title with no date" in problem for problem in kept.problems)
+
+
+async def test_the_strip_says_a_scan_failed(channel_root):
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.query_one("#tabs", TabbedContent).active = "ch0"
+        await pilot.pause()
+
+        with mock.patch.object(
+            channel_module.Channel, "scan", side_effect=ValueError("a title with no date")
+        ):
+            app.rescan()
+            await settle(app, pilot)
+
+        strip = app.query_one(ChannelPane).query_one("#strip", Static)
+        assert "a title with no date" in strip.visual.plain
+
+
+async def test_a_failure_is_not_counted_twice(channel_root):
+    """A volume that has gone fails every poll; the note replaces, never stacks."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        key = app.channels[0].key
+
+        with mock.patch.object(channel_module.Channel, "scan", side_effect=OSError("gone")):
+            for _ in range(3):
+                app.rescan()
+                await settle(app, pilot)
+
+        assert len(app.snapshots[key].problems) == 1
+
+
+async def test_a_channel_removed_mid_sweep_is_not_resurrected(channel_root):
+    """Discovery can drop a channel while the scan that includes it is out."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        key = app.channels[0].key
+        scanned = {key: app.snapshots[key]}
+        app.channels.clear()
+        app.snapshots.clear()
+
+        app._apply(scanned, {}, datetime.now().astimezone())
+
+        assert app.snapshots == {}
+
+
 # -- discovery while running ---------------------------------------------
 
 

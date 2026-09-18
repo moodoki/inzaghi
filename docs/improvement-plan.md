@@ -2,8 +2,9 @@
 
 Phases 0 to 5 come from a performance review; 6 and 7 from the issue tracker.
 
-**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 is open as #15.
-Phases 3 to 5 are approved and not started. Phases 6 and 7 are written up here
+**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 as #15. Phase
+3 is open as #17 and phase 4 on `scheduling-hygiene`. Phase 5 is approved and
+not started. Phases 6 and 7 are written up here
 for the first time and need the decisions each one names. Two standing targets —
 more harnesses, and the effect of the model behind them — sit at the end; they
 are lenses on the phases rather than work with an end.
@@ -205,21 +206,29 @@ matters.
 **4.1 Don't re-fire the remembered rescan instantly.** Once a sweep outruns the
 poll, the pending flag re-fires immediately and the volume is scanned
 continuously — on a folder that is slow *because* it is busy, this is the worst
-client behaviour available. Schedule the follow-up at `poll_seconds - elapsed`,
-except for a request that came from a write, which must stay immediate so the
-rescan still sees the send.
+client behaviour available. A request that came from a write must stay
+immediate, so the rescan still sees the send.
+*Done differently:* rather than schedule the follow-up at `poll_seconds -
+elapsed`, the poll's request is simply not remembered. The interval goes on
+firing while the sweep is out, so the poll is its own retry and the next tick
+is along within `poll_seconds` — the same shape as the preview's dropped
+re-read. A write's request is remembered as before.
 
 **4.2 Backstop the sweep against non-`OSError`.** `_read_channels` catches only
 `OSError` and `@work` defaults to `exit_on_error=True`, so a `ValueError` in one
 channel's scan takes the whole app down. Catch `Exception` per channel, keep the
 last snapshot, surface it in `problems`. The "one widget goes quiet rather than
 crashing the app" convention currently rests on parser discipline alone.
+*Also:* `Snapshot.problems` was written by every scan and read by nothing, which
+is the failure the front-matter convention names. The strip now prints it, so
+what the scan could not read says so under the liveness line.
 
 **4.3 Filter `_apply` to channels still present.** A channel dropped by discovery
 mid-sweep has its Snapshot resurrected and retained for the life of the process.
 One line.
 
-**2.3 Narrow the `CACHE_SECONDS` expiry to recent files.** Today every cached
+**2.3 Narrow the `CACHE_SECONDS` expiry to recent files.** *(landed with phase 2
+in #15; kept here for the decision it records.)* Today every cached
 parse older than a minute is re-read, including the append-only log: 1,048 opens
 and 2.4 MB per four-channel minute, landing in a single poll. The log is immutable
 by contract and an atomic replace changes the inode the fingerprint already
