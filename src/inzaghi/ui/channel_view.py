@@ -28,12 +28,22 @@ from .rows import (
     Row,
     attachment_label,
     build_rows,
+    clip_divider,
     labels_change_at,
     divider_label,
     filter_bar,
     kind_cycle,
+    older_label,
     unread_divider,
 )
+
+#: How many rows of a channel are built at once, and how many more a press at
+#: the foot of the window adds. A channel that has been running for a month has
+#: thousands of entries and nobody scrolls to the bottom of one; building them
+#: all is a second and a half of work per rebuild, per tab switch and per
+#: search, for rows nobody was going to look at. Four hundred is deep enough
+#: that the fold is somewhere below where reading stops.
+WINDOW_ROWS = 400
 
 #: Two option lists live in this pane, and every handler below has to say
 #: which one it means.
@@ -63,6 +73,22 @@ def _line(markup: str) -> Text:
 
 
 _EMPTY = "*Nothing here yet.*\n\nThe session has not written anything to this channel."
+
+
+class Timeline(OptionList):
+    """The channel's own list, which knows that it is only partly built.
+
+    One motion has to: ``G`` asks for the far end of the channel by name, and
+    the far end is not in the list until someone says so. Everything else in
+    ``ui.vim`` goes on treating this as an ``OptionList``, which is the point
+    of naming motions rather than binding keys to widgets.
+    """
+
+    def action_last(self) -> None:
+        pane = next((node for node in self.ancestors if isinstance(node, ChannelPane)), None)
+        if pane is not None:
+            pane.reveal_all()
+        super().action_last()
 
 
 class ChannelPane(Vertical):
@@ -138,6 +164,15 @@ class ChannelPane(Vertical):
         self._labels: list[str] = []
         self._signature: list[tuple] = []
         self._divider: tuple[int, int] | None = None
+        #: How many of ``self._rows`` are built, and the filter that number
+        #: was chosen under. A window someone opened stays open while they go
+        #: on reading the same list -- a message arriving must not shut it --
+        #: and a different filter is a different list, which starts again.
+        self._window = WINDOW_ROWS
+        self._window_for = Filter()
+        #: What ``_render_rows`` actually built, which ``_retitle`` may write
+        #: into and nothing beyond.
+        self._shown = 0
         self._selected: str | None = None
         #: (key, document) of what the reader is showing, so an unchanged
         #: document is never re-rendered and never scrolled back to the top.
@@ -168,7 +203,7 @@ class ChannelPane(Vertical):
         yield Input(placeholder="search this channel", id="search")
         with Horizontal(id="channel-body"):
             with Vertical(id="left"):
-                yield OptionList(id=TIMELINE)
+                yield Timeline(id=TIMELINE)
                 yield Composer(id="composer")
             with Vertical(id="reader-column"):
                 with VerticalScroll(id="reader"):
@@ -255,6 +290,10 @@ class ChannelPane(Vertical):
         ("4m ago"), so they change on nearly every poll while the rows behind
         them are identical; those are written into place instead.
         """
+        if self.filter != self._window_for:
+            # A different question about the same channel is a different list.
+            self._window_for = self.filter
+            self._window = WINDOW_ROWS
         rows = self.filter.apply(self._all_rows)
         labels = [row.label for row in rows]
         signature = [(row.key, row.unread, row.kind, row.pinned) for row in rows]
@@ -280,10 +319,48 @@ class ChannelPane(Vertical):
         searched = self.filter.with_kind(ALL).apply(self._all_rows)
         self.query_one("#filterbar", Static).update(filter_bar(searched, self.filter))
 
+    def _materialised(self) -> int:
+        """How many rows to build: the window, stretched to hold the cursor.
+
+        A key can be selected from outside the window -- restored after a
+        filter that moved it down, or carried over from a wider list -- and a
+        cursor with no option to sit on is a cursor that jumps to the top.
+        """
+        window = self._window
+        index = self._index_of(self._selected)
+        if index is not None:
+            window = max(window, index + 1)
+        return min(window, len(self._rows))
+
+    def reveal_all(self) -> None:
+        """Build the whole channel, because something asked for the far end.
+
+        ``G`` is the one motion that names the end out loud, so it is the one
+        that pays for it. Everything else grows the window a screenful of
+        reading at a time.
+        """
+        self._grow_to(len(self._rows))
+
+    def _grow_to(self, window: int) -> None:
+        if window <= self._shown:
+            return
+        # The cursor moves to the first row that was not there a moment ago:
+        # what was asked for was more of the list, and that is where it starts.
+        following = self._rows[self._shown] if self._shown < len(self._rows) else None
+        self._window = window
+        if following is not None:
+            self._selected = following.key
+        self._render_rows()
+
     def _retitle(self, labels: list[str]) -> None:
-        """Rewrite changed row labels in place, leaving the cursor alone."""
+        """Rewrite changed row labels in place, leaving the cursor alone.
+
+        Only as far as the window goes: a row that was never built has no
+        prompt to replace, and asking for one is a full rebuild by way of
+        ``OptionDoesNotExist``.
+        """
         timeline = self.query_one(f"#{TIMELINE}", OptionList)
-        for row, label, previous in zip(self._rows, labels, self._labels):
+        for row, label, previous in zip(self._rows[: self._shown], labels, self._labels):
             if label == previous:
                 continue
             try:
@@ -300,18 +377,26 @@ class ChannelPane(Vertical):
         # otherwise overwrite the very thing being restored.
         selected = self._selected
         timeline.clear_options()
+        self._shown = self._materialised()
+        shown = self._rows[: self._shown]
+        divider = clip_divider(self._divider, self._rows, self._shown)
         options: list[Option] = []
         pinned_done = False
-        for index, row in enumerate(self._rows):
+        for index, row in enumerate(shown):
             if not row.pinned and not pinned_done and options:
                 # A rule between the live panels and the append-only log.
                 options.append(Option(Text("─" * 4, "dim"), disabled=True))
             pinned_done = pinned_done or not row.pinned
             options.append(Option(_line(row.label), id=row.key))
-            if self._divider and index == self._divider[0]:
+            if divider and index == divider[0]:
                 options.append(
-                    Option(_line(divider_label(self._divider[1])), disabled=True)
+                    Option(_line(divider_label(divider[1])), disabled=True)
                 )
+        hidden = len(self._rows) - self._shown
+        if hidden:
+            # No id: the foot of the window is not a row, and everything that
+            # restores a cursor or shows a document goes looking by key.
+            options.append(Option(_line(older_label(hidden, WINDOW_ROWS))))
         if not options:
             options.append(Option(Text("no matches", "dim italic"), disabled=True))
         timeline.add_options(options)
@@ -372,7 +457,12 @@ class ChannelPane(Vertical):
                 self.post_message(self.Read(self.channel.key, row.key))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Enter, or a click, on a delivered file asks to see it."""
+        """Enter, or a click: another screenful of channel, or a delivered file."""
+        if event.option_list.id == TIMELINE:
+            if event.option.id is None:  # the foot of the window; rows have keys
+                event.stop()
+                self._grow_to(self._shown + WINDOW_ROWS)
+            return
         if event.option_list.id != ATTACHMENTS:
             return
         event.stop()

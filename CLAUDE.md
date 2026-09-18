@@ -182,6 +182,20 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by
   option id, not index: the list also holds separators and the divider.
+- And only the first `WINDOW_ROWS` of them are built. A month-old channel runs
+  to thousands of entries and nobody reads to the bottom of one, but every
+  rebuild, tab switch and search pays for every row that exists. What is built
+  is the window stretched to hold the cursor — a key restored from outside it
+  would otherwise have no option to sit on, and a cursor with nowhere to sit
+  jumps to the top. The foot of the window is an option with no id, because
+  everything that restores a cursor or shows a document goes looking by key;
+  `G` is the one motion that names the far end out loud, so `Timeline` is the
+  one widget that overrides a `ui.vim` motion, and it materialises the rest
+  before it goes there. The window closes again when the *filter* changes,
+  never when a message arrives: a new entry must not shut a window someone
+  opened. A divider that falls past the fold moves to the fold and counts what
+  is above it, which is the same sentence about the part of the channel that
+  is on screen.
 - The rows themselves are only *built* when building them would produce
   something different: the channel's content compared against what they were
   built from, and `fmt.next_change` for the moment a relative label is next
