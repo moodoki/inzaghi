@@ -184,6 +184,17 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   writes, so a poll that found nothing new costs nothing.
 - The skill's `reference/channel-README.md` is generated from
   `protocol.CHANNEL_README`; a test guards the drift, `inz skill sync` fixes it.
+- Nothing that goes to GitHub names a channel, a project or a person. Commits,
+  pull requests, issues and anything under `docs/` are public; the channels are
+  someone's work, their names say what that work is, and at least one of them
+  will be renamed before it is public. Channels are named by **codename** --
+  NATO words, assigned in creation order -- and the mapping to real names and
+  paths lives in `CLAUDE.local.md`, which `.gitignore` holds. Deliberately
+  meaningless words: a codename that hints at the subject is a codename that
+  leaks it. The same rule covers host names, dataset and experiment names, and
+  the usernames of people sharing a machine. Evidence from a live channel is
+  welcome; the identity of the channel is not the evidence, and a codename
+  keeps a finding traceable without publishing what it was traced from.
 - `uv run --with pytest pytest -q` to run the suite. CI runs the same one on
   the floor `pyproject.toml` promises and on the version development happens
   on, plus macOS -- which ships openrsync rather than rsync, and is the side
