@@ -16,11 +16,13 @@ honest way to answer "what is there now".
 
 from __future__ import annotations
 
+import os
+
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from typing import NamedTuple
 
 from collections.abc import Iterable
@@ -47,6 +49,14 @@ DONE = "done"
 #: ``stat`` says about it.  Nothing on a local disk needs this; a synced folder
 #: does.  See :meth:`Channel._doc`.
 CACHE_SECONDS = 60.0
+
+#: How long after its last write an append-only entry is taken to be finished
+#: with.  Past this a cached parse is kept for as long as the fingerprint
+#: agrees, rather than re-read every ``CACHE_SECONDS`` against the chance that
+#: a session rewrote an old entry in place while its stat froze.  Generous on
+#: purpose: the cost of being wrong is a stale row until the file is touched,
+#: and the cost of being right is a cold scan per channel per minute.
+SETTLED_SECONDS = 600.0
 
 _TEXT_SUFFIXES = frozenset({".md", ".txt", ".markdown"})
 _ACK_REF_RE = re.compile(r"\bre[:\-]\s*(?P<ref>.+?)\s*$", re.I)
@@ -134,7 +144,9 @@ class Channel:
     def done_dir(self) -> Path:
         return self.inbox_dir / DONE
 
-    def _doc(self, path: Path, *, trust_stat: bool = True) -> Doc | None:
+    def _doc(
+        self, path: Path, *, trust_stat: bool = True, listed: "os.stat_result | None" = None
+    ) -> Doc | None:
         """Load a document, reusing the cached parse when it has not changed.
 
         "Has not changed" is a question for the filesystem, and a File Provider
@@ -162,22 +174,40 @@ class Channel:
         timestamp is almost always the same length as the one before it, so
         size vouches for nothing on its own.
 
-        And no parse is trusted for longer than ``CACHE_SECONDS``, so that a
-        stat which has stopped moving altogether costs one stale minute rather
-        than the rest of the session.
+        And no parse of a file that might still be *rewritten* is trusted for
+        longer than ``CACHE_SECONDS``, so that a stat which has stopped moving
+        altogether costs one stale minute rather than the rest of the session.
+        Which files those are: the ones overwritten in place, and any entry
+        written recently enough that a session could still be fixing it.
+
+        The rest of the log is not re-read on a timer. It is append-only by
+        contract -- a new entry is a new path, and a new path is always read --
+        and an atomic replace of an old one moves the inode the fingerprint
+        above carries. Re-reading all of it every minute cost a cold scan's
+        worth of opens per channel per minute, in one poll, for the case of a
+        session rewriting an old entry in place *and* a stat frozen over it.
         """
-        try:
-            stat = path.stat()
-        except OSError:
-            self._cache.pop(path, None)
-            return None
+        # ``listed`` is what the directory entry already knew, from the same
+        # moment: the listing stat-ed this file to decide it was one, and
+        # asking the volume again for the same four numbers is a round trip
+        # bought twice.
+        stat = listed
+        if stat is None:
+            try:
+                stat = path.stat()
+            except OSError:
+                self._cache.pop(path, None)
+                return None
         fingerprint = (stat.st_mtime, stat.st_size, stat.st_ctime, stat.st_ino)
         cached = self._cache.get(path)
         if (
             trust_stat
             and cached is not None
             and cached.fingerprint == fingerprint
-            and monotonic() - cached.read_at < CACHE_SECONDS
+            and (
+                monotonic() - cached.read_at < CACHE_SECONDS
+                or time() - stat.st_mtime > SETTLED_SECONDS
+            )
         ):
             return cached.doc
         try:
@@ -222,7 +252,7 @@ class Channel:
         conflicts: list[Path] = []
         problems: list[str] = []
 
-        for path in _text_files(self.notifications_dir, problems):
+        for path, listed in _text_files(self.notifications_dir, problems):
             if parse.is_conflict_copy(path.name):
                 conflicts.append(path)
                 continue
@@ -230,7 +260,7 @@ class Channel:
             # rewritten in place is exactly the question of whether its cached
             # parse may be trusted.
             singleton = _is_singleton(path.name)
-            doc = self._doc(path, trust_stat=not singleton)
+            doc = self._doc(path, trust_stat=not singleton, listed=listed)
             if doc is None:
                 continue
             if singleton:
@@ -286,23 +316,41 @@ class Channel:
     def _scan_outbound(self, conflicts: list[Path], problems: list[str]) -> list[Event]:
         out: list[Event] = []
         for in_flight, directory in ((True, self.inbox_dir), (False, self.done_dir)):
-            for path in _text_files(directory, problems):
+            for path, listed in _text_files(directory, problems):
                 if parse.is_conflict_copy(path.name):
                     conflicts.append(path)
                     continue
-                doc = self._doc(path)
+                doc = self._doc(path, listed=listed)
                 if doc is not None:
                     out.append(_outbound_event(doc, in_flight=in_flight))
         return out
 
 
-def _text_files(directory: Path, problems: list[str]) -> list[Path]:
+def _text_files(directory: Path, problems: list[str]) -> list[tuple[Path, os.stat_result | None]]:
+    """The text files in ``directory``, each with what the listing already knew.
+
+    ``scandir`` carries the file type in the directory entry on the systems
+    this runs on, and the ``stat`` it caches is the one ``_doc`` would have
+    asked for a moment later -- so the entry is handed on rather than the path
+    alone, and the same file is not stat-ed twice for two questions about it.
+
+    ``None`` where the entry could not answer from what it had: the caller
+    asks for itself, as it always did.
+    """
     try:
-        return sorted(
-            p
-            for p in directory.iterdir()
-            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in _TEXT_SUFFIXES
-        )
+        with os.scandir(directory) as entries:
+            found: list[tuple[Path, os.stat_result | None]] = []
+            for entry in entries:
+                if entry.name.startswith(".") or Path(entry.name).suffix.lower() not in _TEXT_SUFFIXES:
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    info = None
+                found.append((directory / entry.name, info))
+            return sorted(found, key=lambda pair: pair[0])
     except FileNotFoundError:
         return []
     except OSError as exc:  # a sync client can yank the mount mid-scan

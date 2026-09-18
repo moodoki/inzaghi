@@ -327,7 +327,26 @@ def test_a_rewrite_the_modification_time_missed_is_still_noticed(channel, channe
     assert "Cheqsumzz" in milestone.doc.body
 
 
-def test_no_parse_is_trusted_for_ever(channel, channel_root, monkeypatch):
+def freeze_the_listing(monkeypatch, entry: Path, frozen) -> None:
+    """Make the directory listing report ``frozen`` for one file.
+
+    The scan reads a file's numbers from the entry the listing already had, so
+    a stat that has stopped moving is simulated there as well as on ``Path``.
+    """
+    real = channel_module._text_files
+
+    def lying(directory, problems):
+        return [
+            (path, frozen if path == entry else info)
+            for path, info in real(directory, problems)
+        ]
+
+    monkeypatch.setattr(channel_module, "_text_files", lying)
+
+
+def test_no_parse_of_a_file_that_may_still_change_is_trusted_for_ever(
+    channel, channel_root, monkeypatch
+):
     """Even a stat that never moves again costs one stale minute, not the day."""
     entry = channel_root / "notifications" / "2026-09-04_2325_milestone_shard-2-reindexed.md"
     channel.scan(now=NOW)
@@ -335,6 +354,7 @@ def test_no_parse_is_trusted_for_ever(channel, channel_root, monkeypatch):
 
     body = entry.read_text(encoding="utf-8").replace("Checksums", "Cheqsumzz")
     entry.write_text(body, encoding="utf-8")
+    freeze_the_listing(monkeypatch, entry, frozen)
 
     with mock.patch.object(Path, "stat", lambda self, **kw: frozen):
         (stale,) = [e for e in channel.scan(now=NOW).events if e.kind == "milestone"]
@@ -407,3 +427,61 @@ def test_an_attachment_that_lands_later_is_still_noticed(channel, channel_root):
     (folder / "late.md").write_text("# late\n")
     (landed,) = next(iter(channel.scan(now=NOW).attachments.values()))
     assert landed.arrival == "here"
+
+
+def test_an_entry_nobody_has_touched_in_ages_is_not_read_again(
+    channel, channel_root, monkeypatch
+):
+    """The log is append-only by contract, and re-reading all of it every
+    minute cost a cold scan's worth of opens per channel per minute -- against
+    the case of a session rewriting an old entry in place *and* a stat frozen
+    over it."""
+    entry = channel_root / "notifications" / "2026-09-04_2325_milestone_shard-2-reindexed.md"
+    settled = NOW.timestamp() - channel_module.SETTLED_SECONDS - 60
+    os.utime(entry, (settled, settled))
+    channel.scan(now=NOW)
+
+    reads: list[str] = []
+    real_load = Doc.load
+    monkeypatch.setattr(
+        Doc, "load", classmethod(lambda cls, path: reads.append(path.name) or real_load(path))
+    )
+    later = monotonic() + channel_module.CACHE_SECONDS + 1
+    monkeypatch.setattr(channel_module, "monotonic", lambda: later)
+    channel.scan(now=NOW)
+
+    assert entry.name not in reads, "an entry settled for ten minutes was read again"
+    assert "HEARTBEAT.md" in reads, "the overwritten files are still read every scan"
+
+
+def test_an_entry_written_moments_ago_is_still_re_read(channel, channel_root, monkeypatch):
+    """A session that is still fixing what it just wrote is the case the
+    expiry exists for."""
+    entry = channel_root / "notifications" / "2026-09-04_2325_milestone_shard-2-reindexed.md"
+    os.utime(entry, None)  # now
+    channel.scan(now=NOW)
+
+    reads: list[str] = []
+    real_load = Doc.load
+    monkeypatch.setattr(
+        Doc, "load", classmethod(lambda cls, path: reads.append(path.name) or real_load(path))
+    )
+    later = monotonic() + channel_module.CACHE_SECONDS + 1
+    monkeypatch.setattr(channel_module, "monotonic", lambda: later)
+    channel.scan(now=NOW)
+
+    assert entry.name in reads, "a file written moments ago was believed for ever"
+
+
+def test_a_file_is_not_stat_ed_twice_for_two_questions(channel, channel_root, monkeypatch):
+    """The listing stat-ed it to decide it was a file; the parse cache wanted
+    the same four numbers a moment later."""
+    asked: list[str] = []
+    real_stat = Path.stat
+    monkeypatch.setattr(
+        Path, "stat", lambda self, **kw: asked.append(self.name) or real_stat(self, **kw)
+    )
+    channel.scan(now=NOW)
+
+    listed = [name for name in asked if name.endswith(".md")]
+    assert len(listed) == len(set(listed)), f"the same file stat-ed twice: {listed}"

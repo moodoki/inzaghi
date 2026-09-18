@@ -26,11 +26,12 @@ into the bottom of the reader, and never handed to a launcher at all.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
-from stat import S_ISREG
+from stat import S_ISLNK, S_ISREG
 from urllib.parse import unquote
 
 from . import parse
@@ -165,6 +166,22 @@ def resolve(
 
 
 def _resolve_one(folder: Path, name: str, note: str) -> Attachment:
+    """One reference, checked against the folder, in a single ``lstat``.
+
+    Every scan asks this of every reference a channel carries, and on the
+    mounts this app exists for each question costs a round trip to a sync
+    client.  So it asks once: ``lstat`` answers "is it a symlink", "is it a
+    regular file" and "how big, and when" together, where ``is_symlink()``
+    then ``stat()`` asked twice for the same inode.
+
+    Containment is decided without walking the path to the root, which is
+    what ``resolve()`` did on both sides for every reference.  A name that
+    has survived ``_lexical_refusal`` is relative and has no ``..`` in it, so
+    a *flat* one cannot leave the folder unless the leaf is a link -- which
+    the ``lstat`` above has just ruled out.  A name with directories in it
+    can, through a symlinked component in the middle, and that one still gets
+    the careful answer.
+    """
     disposition = _disposition(name)
     refusal = _lexical_refusal(name)
     path = folder / name
@@ -172,31 +189,27 @@ def _resolve_one(folder: Path, name: str, note: str) -> Attachment:
         return Attachment(name=name, path=path, note=note, arrival="refused", problem=refusal)
 
     try:
-        if path.is_symlink():
-            # A link could point anywhere, and nothing in the contract needs
-            # one.  Cheaper to refuse the whole idea than to vouch for a target.
-            return Attachment(
-                name=name,
-                path=path,
-                note=note,
-                arrival="refused",
-                problem="refused: a symlink",
-            )
-        if not _inside(folder, path):
-            return Attachment(
-                name=name,
-                path=path,
-                note=note,
-                arrival="refused",
-                problem="refused: outside the channel",
-            )
-        info = path.stat()
+        info = os.lstat(path)
     except OSError:
         # Absent, or on a volume that has stopped answering.  Both read as
         # still on its way: a missing file in a synced folder is late at
         # least as often as it is gone, and this one was announced.
         return Attachment(name=name, path=path, note=note, disposition=disposition)
 
+    if S_ISLNK(info.st_mode):
+        # A link could point anywhere, and nothing in the contract needs one.
+        # Cheaper to refuse the whole idea than to vouch for a target.
+        return Attachment(
+            name=name, path=path, note=note, arrival="refused", problem="refused: a symlink"
+        )
+    if "/" in name and not _inside(folder, path):
+        return Attachment(
+            name=name,
+            path=path,
+            note=note,
+            arrival="refused",
+            problem="refused: outside the channel",
+        )
     if not S_ISREG(info.st_mode):
         return Attachment(
             name=name, path=path, note=note, arrival="refused", problem="refused: not a file"
@@ -238,7 +251,13 @@ def _lexical_refusal(name: str) -> str:
 
 
 def _inside(folder: Path, path: Path) -> bool:
-    """Whether ``path`` really lands inside ``folder``, symlinked parents and all."""
+    """Whether ``path`` really lands inside ``folder``, symlinked parents and all.
+
+    Walks both paths to the root, so it is asked only about a name with
+    directories in it -- the one shape that can leave the folder without the
+    leaf itself being a link.  A flat name is answered by ``_lexical_refusal``
+    and the ``lstat`` in ``_resolve_one``, at no extra cost.
+    """
     try:
         return path.resolve().is_relative_to(folder.resolve())
     except OSError:
