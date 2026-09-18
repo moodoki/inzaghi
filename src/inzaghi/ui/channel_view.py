@@ -357,6 +357,11 @@ class ChannelPane(Vertical):
             noun = "copy" if count == 1 else "copies"
             hint = "ignored" if self.channel.read_only else "press K to delete"
             line += f"\n[yellow]{count} sync-conflict {noun}[/] [dim]· {hint}[/]"
+        for problem in snapshot.problems:
+            # What the scan could not read, in the words the scan used. A
+            # channel that has gone half-unreadable still shows what it last
+            # had; this is the line that stops that being mistaken for calm.
+            line += f"\n[bold red]![/] {_escape(problem)}"
         self.query_one("#strip", Static).update(line)
 
     # -- selection --------------------------------------------------------
