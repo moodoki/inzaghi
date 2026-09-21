@@ -395,7 +395,7 @@ class ChannelPane(Vertical):
             # What the scan could not read, in the words the scan used. A
             # channel that has gone half-unreadable still shows what it last
             # had; this is the line that stops that being mistaken for calm.
-            line += f"\n[bold red]![/] {_escape(problem)}"
+            line += f"\n[bold red]![/] {escape(problem)}"
         self.query_one("#strip", Static).update(line)
 
     # -- selection --------------------------------------------------------
