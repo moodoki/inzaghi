@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from rich.markup import escape
+from .markup import escape
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical

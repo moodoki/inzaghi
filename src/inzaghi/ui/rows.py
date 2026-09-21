@@ -1,7 +1,7 @@
 """Turning a snapshot into timeline rows.
 
 Kept free of Textual so the ordering and labelling rules can be tested without
-a terminal.  Row labels are Rich markup; every piece of text that came out of a
+a terminal.  Row labels are markup; every piece of text that came out of a
 channel is escaped, because titles genuinely look like ``[milestone] ...`` and
 would otherwise be parsed as markup.
 """
@@ -12,10 +12,9 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-from rich.markup import escape
-
 from .. import fmt
 from ..model import Attachment, Doc, Event, Snapshot, Thread
+from .markup import escape
 
 #: Marker and colour per event kind.  Anything unrecognised stays neutral.
 KIND_STYLE: dict[str, tuple[str, str]] = {
