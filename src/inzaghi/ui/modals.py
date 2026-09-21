@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 
-from rich.markup import escape
+from .markup import escape
 
 
 class ConfirmScreen(ModalScreen[bool]):

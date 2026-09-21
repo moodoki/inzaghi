@@ -2,9 +2,9 @@
 
 Phases 0 to 5 come from a performance review; 6 and 7 from the issue tracker.
 
-**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 as #15.
-Phases 3 to 7 are open as #17 to #21, one branch each. Only the two standing
-targets at the end are left, and neither has a finish line. Phases 6 and 7 are written up here
+**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 as #15, phase
+3 as #17. Phases 4 to 7 are open as #18 to #21, one branch each. Phases 6 and 7
+were written up here
 for the first time and need the decisions each one names. Two standing targets —
 more harnesses, and the effect of the model behind them — sit at the end; they
 are lenses on the phases rather than work with an end.
@@ -199,7 +199,11 @@ Typing `shard` is five rebuilds today.
 `visualize`**: ~50 µs → ~15 µs per row on every rebuild, switch and search.
 *Moderate risk:* Rich `escape()` output and colour names must survive Textual's
 markup dialect — the titles genuinely contain `[milestone]`, so the escaping test
-matters.
+matters. It did: Rich's escape doubles a backslash for a parser that halves it
+again, and Textual's does not halve, so escaping moved to `ui/markup.py` and
+escapes brackets alone — exact for every character, at the cost of a tag that
+stands immediately after a backslash, which Textual eats whatever one escapes
+with. `tests/test_markup.py` writes both halves down.
 
 ### Phase 4 — scheduling hygiene (half a day)
 

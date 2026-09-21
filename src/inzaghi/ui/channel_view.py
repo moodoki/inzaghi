@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from rich.text import Text
 from textual.app import ComposeResult
 from textual.content import Content, Span
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.binding import Binding
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Input, Markdown, OptionList, Static
 from textual.widgets.option_list import Option, OptionDoesNotExist
@@ -19,6 +19,7 @@ from .. import attach, fmt, parse
 from ..channel import CACHE_SECONDS, Channel
 from ..model import Attachment, Snapshot
 from .composer import Composer
+from .markup import escape
 from .mounting import composed
 from .preview import Preview
 from .rows import (
@@ -54,12 +55,22 @@ COLUMNS = (
 #: places ``/`` means "find this in what I am reading".
 READING = {"reader": "doc", "preview-body": "file"}
 
-def _line(markup: str) -> Text:
-    """One row, clipped rather than wrapped: the timeline is a list, not prose."""
-    text = Text.from_markup(markup)
-    text.no_wrap = True
-    text.overflow = "ellipsis"
-    return text
+#: How long the channel search waits after a keystroke before it rebuilds the
+#: timeline. Long enough that a typed word costs one rebuild rather than one
+#: per letter, short enough that a search you have finished typing is already
+#: applied by the time you have looked up.
+DEBOUNCE_SECONDS = 0.1
+
+
+def _line(markup: str) -> Content:
+    """One row of the timeline, as Textual's own markup rather than Rich's.
+
+    A Rich renderable handed to a widget is converted to a visual on the way
+    in, once per row per rebuild; ``Content`` is already one. Clipping is left
+    to the stylesheet -- ``text-wrap`` and ``text-overflow`` on the two lists
+    say it for every row at once, where a Rich ``Text`` had to carry it itself.
+    """
+    return Content.from_markup(markup)
 
 
 _EMPTY = "*Nothing here yet.*\n\nThe session has not written anything to this channel."
@@ -161,6 +172,9 @@ class ChannelPane(Vertical):
         #: Whether the strip's cursor is where somebody put it, as opposed to
         #: where filling the list left it.
         self._stepped = False
+        #: A rebuild the search box has asked for and not yet had. Typing
+        #: ``shard`` asks five times for a list nobody sees four of.
+        self._filtering: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="strip", markup=True)
@@ -246,6 +260,22 @@ class ChannelPane(Vertical):
         self._apply_filter()
         self.update_strip(now)
 
+    def _filter_soon(self) -> None:
+        """Rebuild once the typing stops, rather than once per letter.
+
+        Each keystroke pushes the rebuild back; the pane may be gone by the
+        time it comes due, so the timer checks rather than queries and hopes.
+        """
+        if self._filtering is not None:
+            self._filtering.stop()
+
+        def fire() -> None:
+            self._filtering = None
+            if composed(self, f"#{TIMELINE}"):
+                self._apply_filter()
+
+        self._filtering = self.set_timer(DEBOUNCE_SECONDS, fire)
+
     def _apply_filter(self) -> None:
         """Update the timeline without disturbing whoever is reading it.
 
@@ -255,6 +285,10 @@ class ChannelPane(Vertical):
         ("4m ago"), so they change on nearly every poll while the rows behind
         them are identical; those are written into place instead.
         """
+        if self._filtering is not None:
+            # Whatever asked for this has the current filter in hand already.
+            self._filtering.stop()
+            self._filtering = None
         rows = self.filter.apply(self._all_rows)
         labels = [row.label for row in rows]
         signature = [(row.key, row.unread, row.kind, row.pinned) for row in rows]
@@ -305,7 +339,7 @@ class ChannelPane(Vertical):
         for index, row in enumerate(self._rows):
             if not row.pinned and not pinned_done and options:
                 # A rule between the live panels and the append-only log.
-                options.append(Option(Text("─" * 4, "dim"), disabled=True))
+                options.append(Option(Content.styled("─" * 4, "dim"), disabled=True))
             pinned_done = pinned_done or not row.pinned
             options.append(Option(_line(row.label), id=row.key))
             if self._divider and index == self._divider[0]:
@@ -313,7 +347,7 @@ class ChannelPane(Vertical):
                     Option(_line(divider_label(self._divider[1])), disabled=True)
                 )
         if not options:
-            options.append(Option(Text("no matches", "dim italic"), disabled=True))
+            options.append(Option(Content.styled("no matches", "dim italic"), disabled=True))
         timeline.add_options(options)
 
         # Restore by key, never by position: the list also holds the pinned/log
@@ -342,7 +376,7 @@ class ChannelPane(Vertical):
             parts.append(f"heard {fmt.ago(heartbeat.updated, now)}")
             parts.append(f"[{colour}]{fmt.countdown(heartbeat.next_by, now)}[/]")
             if heartbeat.state:
-                parts.append(f"[dim]{_escape(heartbeat.state)}[/]")
+                parts.append(f"[dim]{escape(heartbeat.state)}[/]")
         else:
             parts.append("[dim]no heartbeat file[/]")
         parts.extend(_link_note(snapshot, now))
@@ -351,7 +385,7 @@ class ChannelPane(Vertical):
 
         line = "  ·  ".join(parts)
         if snapshot.waiting:
-            line += f"\n[bold red]waiting on you:[/] {_escape(snapshot.waiting.splitlines()[0])}"
+            line += f"\n[bold red]waiting on you:[/] {escape(snapshot.waiting.splitlines()[0])}"
         if snapshot.conflicts:
             count = len(snapshot.conflicts)
             noun = "copy" if count == 1 else "copies"
@@ -685,7 +719,7 @@ class ChannelPane(Vertical):
             self._refind()
             return
         self.filter = self.filter.with_query(event.value)
-        self._apply_filter()
+        self._filter_soon()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Enter keeps the search applied but gives the rows their space back.
@@ -700,6 +734,9 @@ class ChannelPane(Vertical):
             (target or self.query_one(f"#{TIMELINE}", OptionList)).focus()
             return
         self.query_one("#search", Input).display = False
+        # Enter is the end of the typing: whatever the debounce was still
+        # waiting for has arrived.
+        self._apply_filter()
         self.focus_timeline()
 
     def focus_timeline(self) -> None:
@@ -932,7 +969,3 @@ def _link_note(snapshot: Snapshot, now: datetime) -> list[str]:
     age = transport.age(now)
     colour = "bold red" if health == "stale" else "yellow"
     return [f"[{colour}]⇅ no sync for {fmt.duration(age)}[/]" if age else f"[{colour}]⇅ no sync[/]"]
-
-
-def _escape(text: str) -> str:
-    return text.replace("[", "\\[")

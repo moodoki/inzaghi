@@ -13,7 +13,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from rich.markup import escape
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -24,8 +23,9 @@ from textual.widgets import Static, TextArea
 
 from .. import compose as composer
 from .. import fmt
-from .mounting import composed
+from .markup import escape
 from .modals import PromptScreen
+from .mounting import composed
 
 #: How long after a keystroke the draft is looked over for paths. Deciding
 #: whether a path is a file means asking the filesystem, and a draft is typed
