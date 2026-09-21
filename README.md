@@ -35,6 +35,55 @@ It is not a chat client. Sessions wake on their own schedule — half an hour is
 typical — so the questions Inzaghi is built to answer are *is it alive*, *when will
 it speak next*, *does it need me*, and *has it seen what I sent*.
 
+## Installing
+
+Python 3.11 or newer. The only runtime dependency is Textual.
+
+```sh
+uv tool install git+https://github.com/moodoki/inzaghi   # from anywhere
+uv tool install --editable .                             # from a clone, tracking it
+```
+
+Either puts `inz` and `inzaghi` on PATH — the same entry point under two
+names, and the short one is used throughout this file. `--editable` is worth
+having if you also install the session-side skill, which symlinks into the
+harness by default: the client and the contract it teaches then follow the
+same checkout, and `inz skill sync` keeps them in step.
+
+Inside a clone, `uv run inz` does everything without installing anything.
+
+## Where things live
+
+```
+~/.config/inzaghi/config.toml    what to watch
+~/.local/state/inzaghi/          read receipts, and sync markers by convention
+```
+
+`XDG_CONFIG_HOME` and `XDG_STATE_HOME` move them, `INZAGHI_CONFIG` and
+`INZAGHI_STATE_DIR` override them outright, and `inz --config <path>` changes
+it for one run.
+
+There is no wizard: the config is a file you write. A missing one is not an
+error — Inzaghi remembers where it would be and picks it up on the next
+discovery pass, without a restart — and neither is one being edited, since a
+config that will not parse leaves the running one alone rather than dropping
+every channel. The smallest one that does something:
+
+```toml
+[[channels]]
+path = "~/sync/channels/northwind"
+```
+
+Then `inz`, which opens the interface; `inz ls` prints a line per channel
+instead. For a channel that does not exist yet,
+`inz init ~/sync/channels/northwind --name northwind` creates the folder and
+writes the contract into it.
+
+Nothing Inzaghi believes is ever written into a channel. Read receipts — which
+entries you have seen — live in the state directory above, because a channel is
+the session's to write and a file this end put there is a file the session has
+to be told to ignore.
+
 ## The channel contract
 
 One folder per project, shared with one session:
@@ -125,6 +174,14 @@ path = "/Volumes/shared/channels/southwind"
 read_only = true
 ```
 
+A root is a folder that holds channels, scanned rather than listed:
+
+```toml
+[[roots]]
+path = "~/sync/channels"
+depth = 1                  # how far below the root a channel may sit
+```
+
 Roots exist so that a channel created later needs no edit here. Channels are
 found by scanning the configured roots, and rediscovered every
 `discover_seconds` (30 by default), so a folder created while Inzaghi is running
@@ -150,7 +207,18 @@ them is a fallback for the others:
    neither end has to be awake when the other writes, which is what makes it
    the convenient default.
 3. **rsync over ssh**, below, for when you would rather not put the channel
-   through a third party, or there is no sync client on the box:
+   through a third party, or there is no sync client on the box.
+
+### Setting up rsync over ssh
+
+Three things have to be true before the config below means anything: `rsync`
+exists on both machines (macOS ships openrsync, which is fine); `ssh <host>`
+reaches the session's machine without asking you anything, since this will run
+from cron; and the channel already exists over there. That end is the
+original. The one here is a mirror, and `inz sync` creates it on its first
+run.
+
+Then one entry per channel:
 
 ```toml
 [[channels]]
@@ -158,7 +226,15 @@ path = "~/channels/northwind"          # the mirror on this machine
 name = "northwind"
 remote = "worker:/srv/channels/northwind"
 sync_marker = "~/.local/state/inzaghi/northwind.synced"
+sync_interval_seconds = 300            # how often you intend to run it
 ```
+
+`remote` is an ordinary rsync target, so `worker` there is whatever name your
+`~/.ssh/config` knows. `sync_marker` is a file each completed cycle stamps,
+which is what lets a silent channel be blamed on the link rather than the
+session; *When the link is the problem, not the session*, below, is about what
+that buys and where the file may not live. `inz sync` writes it, creating its
+parent directory if it has to, so nothing needs to exist there beforehand.
 
 ```sh
 inz sync                # every channel with a remote
@@ -170,8 +246,11 @@ The first run creates the mirror, so the folder does not have to exist yet.
 From cron, on the machine you watch from:
 
 ```
-*/2 * * * * /path/to/inz sync >>~/.cache/inz-sync.log 2>&1
+*/2 * * * * $HOME/.local/bin/inz sync >>$HOME/.cache/inz-sync.log 2>&1
 ```
+
+Spelled out, because cron's `PATH` is not yours. `uv tool dir --bin` says where
+`uv tool install` put the entry points — `~/.local/bin` by default.
 
 ### Which end drives
 
@@ -231,7 +310,9 @@ The marker below is worth setting for the third of those and pointless for the
 first: with no transport in the way, there is nothing that could stop
 arriving.
 
-Point a channel at a marker file and Inzaghi can tell them apart:
+Point a channel at a marker file and Inzaghi can tell them apart — the two
+keys in the rsync config above, which are worth setting even when something
+other than `inz sync` is moving the folder:
 
 ```toml
 [[channels]]
