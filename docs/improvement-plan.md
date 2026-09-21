@@ -2,8 +2,9 @@
 
 Phases 0 to 5 come from a performance review; 6 and 7 from the issue tracker.
 
-**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 is open as #15.
-Phases 3 to 5 are approved and not started. Phases 6 and 7 are written up here
+**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 as #15.
+Phases 3 to 7 are open as #17 to #21, one branch each. Only the two standing
+targets at the end are left, and neither has a finish line. Phases 6 and 7 are written up here
 for the first time and need the decisions each one names. Two standing targets —
 more harnesses, and the effect of the model behind them — sit at the end; they
 are lenses on the phases rather than work with an end.
@@ -341,10 +342,11 @@ what it must do when a named file is missing. And `transport.retire` deletes a
 local message once it appears in `done/`; nothing currently retires the payload
 it named.
 
-*Decisions this needs:* whether the contract tells a session to *wait* for a
-named file or to act and note the absence; whether outbound copying takes a size
-ceiling and what it is (a screenshot is the point, a 4 GB core dump on a sync
-volume is not); and whether a payload is retired with its message or left.
+*Decided:* a session waits briefly — finish the inbox, look again a few minutes
+later — and then acts and notes the absence in the `ack`, never in a loop. The
+ceiling is 25 MB, in the region of the whole inbound corpus across four
+channels. A payload is retired with its message, unless a message still in
+`inbox/` names it.
 
 ---
 

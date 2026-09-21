@@ -240,6 +240,25 @@ ConfirmScreen {
     background: $surface;
 }
 
+PromptScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#prompt-box {
+    width: 70;
+    max-width: 90%;
+    height: auto;
+    padding: 1 2;
+    border: thick $primary;
+    background: $surface;
+}
+
+#prompt-question {
+    width: 100%;
+    padding-bottom: 1;
+}
+
 #confirm-question {
     text-style: bold;
     padding-bottom: 1;

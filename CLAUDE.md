@@ -104,6 +104,9 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   `CACHE_SECONDS` is read again regardless. When the text that comes back
   disagrees with the stamp describing it, the text wins -- a re-read the clock
   had to ask for is precisely the one whose stat never moved.
+- `transport.retire` also deletes the payloads a retired message named, and
+  only those no message still in `inbox/` names: an exact name, in exactly that
+  folder, re-checked at the moment of unlinking, like everything else here.
 - Two places delete: `channel.remove_conflicts` and `transport.retire`. Both
   re-validate every path at the moment of unlinking rather than trusting the
   listing they started from, and neither takes its decision from a fuzzy key --
@@ -150,6 +153,17 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   append-only by contract -- a new entry is a new path, and a new path is
   always read -- so a settled parse is kept while its fingerprint agrees.
   Re-reading all of it every minute cost a cold scan per channel per minute.
+- A message carries a file by pointing at it, and the pointing is done here: a
+  path means nothing on the machine that reads it, so `compose.send` copies
+  what the draft points at into `inbox/attachments/` and rewrites the draft's
+  own reference before the message is written. Payload first, message second --
+  the order the contract asks a session for, for the same reason. A draft that
+  points at something that cannot go refuses the whole send rather than
+  carrying a message whose file never followed: a session cannot tell a
+  reference that was never going to resolve from one that has not synced yet.
+  What counts as pointing is deliberate -- a link, or a path alone on its line
+  -- because a path in the middle of a sentence is prose, and a path in a
+  fence is being quoted.
 - An attachment exists only because a notification references it; a bare file
   in `notifications/attachments/` is invisible on purpose. Resolution happens
   per scan, never in the `Doc` cache: the prose does not change when the
