@@ -31,8 +31,16 @@ from inzaghi.ui.composer import Composer
 from inzaghi.ui.modals import ConfirmScreen
 
 
-def make_app(root: Path, *, read_only: bool = False) -> InzaghiApp:
+def make_app(root: Path, *, read_only: bool = False, poll_seconds: float | None = None) -> InzaghiApp:
+    """One channel, and by default the poll interval the app ships with.
+
+    ``poll_seconds`` is there for tests that count the work a keystroke
+    causes: a scan landing in the middle of one is a second rebuild that has
+    nothing to do with what is being measured.
+    """
     config = Config(channels=[ChannelSpec(path=root, name=root.name, read_only=read_only)])
+    if poll_seconds is not None:
+        config.poll_seconds = poll_seconds
     return InzaghiApp(config)
 
 
