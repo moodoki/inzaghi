@@ -21,7 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 from time import monotonic
 
-from rich.markup import escape
+from .markup import escape
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
