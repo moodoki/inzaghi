@@ -84,7 +84,13 @@ ChannelPane {
 
 #timeline {
     /* A list of one-line entries: clip long titles rather than reflow them,
-       so every row stays on the same grid. */
+       so every row stays on the same grid -- and hold the scrollbar's column
+       whether or not there is a scrollbar in it. Without that, the bar
+       appearing resizes the list, a resize clears the height cache, and every
+       option is measured two or three times on the way onto the screen
+       instead of once. One blank column is the price of a tab switch that
+       does not walk the whole channel twice over. */
+    scrollbar-gutter: stable;
     text-wrap: nowrap;
     text-overflow: ellipsis;
     width: 1fr;
@@ -139,6 +145,7 @@ Composer {
    its contents so prose keeps the room when there are none -- and it is
    hidden outright in that case. */
 #attachments {
+    scrollbar-gutter: stable;  /* as #timeline: measured once, not thrice */
     height: auto;
     max-height: 40%;
     border: none;
