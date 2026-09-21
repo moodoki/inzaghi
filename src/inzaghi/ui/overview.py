@@ -168,8 +168,14 @@ def _row(channel: Channel, snapshot: Snapshot, unread: set[str], now: datetime) 
     if channel.read_only:
         name.append("  r/o", "dim italic")
 
+    if health == "paused" and heartbeat:
+        due = f"back {fmt.clock(heartbeat.paused_until, now)}"
+    elif heartbeat:
+        due = fmt.countdown(heartbeat.next_by, now)
+    else:
+        due = "—"
     next_update = Text(
-        fmt.countdown(heartbeat.next_by, now) if heartbeat else "—",
+        due,
         "bold red" if health == "stale" else "yellow" if health == "late" else "dim",
     )
 

@@ -49,6 +49,15 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
 
 - Parsers degrade to `None`; a session that drifts from the format makes one
   widget go quiet rather than crashing the app.
+- A silence the session explained is not an alarm. `paused_until` on
+  `HEARTBEAT.md` -- front matter, or a `- **paused until:**` bullet -- makes
+  `health` report `paused` until that moment and keeps the channel out of
+  `attention()`; past it, the heartbeat is late like any other. It outranks a
+  stale link, because it is a statement about a moment in the future and a sync
+  that stopped does not make it less true. The contract *recommends* writing
+  the heartbeat from something that is not the agent -- a timer, a cron line, a
+  shell loop -- rather than requiring it: a heartbeat the agent writes reports
+  on the agent's turn, but a channel that does it that way is still a channel.
 - Every front-matter key the contract advertises has to be *read* somewhere.
   `ts` on `STATUS.md` and `HEARTBEAT.md` is the time of that update, not only
   an event's timestamp: those files are rewritten whole, so it is the same

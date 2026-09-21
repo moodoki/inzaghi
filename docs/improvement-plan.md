@@ -2,8 +2,9 @@
 
 Phases 0 to 5 come from a performance review; 6 and 7 from the issue tracker.
 
-**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 is open as #15.
-Phases 3 to 5 are approved and not started. Phases 6 and 7 are written up here
+**Where it stands.** Phase 0 merged as #6, phase 1 as #7, phase 2 as #15.
+Phases 3, 4 and 5 are open as #17, #18 and #19, and phase 6 is on
+`heartbeat-outlives-the-turn`. Phase 7 is next. Phases 6 and 7 are written up here
 for the first time and need the decisions each one names. Two standing targets —
 more harnesses, and the effect of the model behind them — sit at the end; they
 are lenses on the phases rather than work with an end.
@@ -298,10 +299,11 @@ and the agent only supplies `state:` when it has something to say. That also
 fixes BRAVO's case above, which has nothing to do with usage limits: a long turn
 stops being a liveness event at all.
 
-*Decisions this needs:* whether the viewer gains a paused state (it changes what
-the `◍`/`○` marks mean and what `attention()` counts), and whether the contract
-*requires* an independent writer or merely recommends one. Requiring it makes
-every existing session non-compliant until it is updated.
+*Decided:* the viewer gains a paused state, and the contract *recommends* an
+independent writer rather than requiring one — so every channel already running
+stays compliant, and the sessions that get it right spread by example rather
+than by breakage. `PROTOCOL_VERSION` goes to 3; both changes are additions, so a
+channel carrying a v2 README is not broken by them.
 
 ### Phase 7 — the inbox carries attachments (issue #12)
 

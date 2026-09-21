@@ -31,6 +31,10 @@ PINNED_ORDER = ("STATUS.md", "HEARTBEAT.md", "TASK_OVERVIEW.md")
 
 HEALTH_STYLE = {
     "fresh": ("●", "green"),
+    # Away on purpose, and it said until when.  Not an alarm, and not the
+    # same mark as a session nobody can judge: the point of the state is that
+    # this silence has an explanation and the other two do not.
+    "paused": ("‖", "cyan"),
     "late": ("◍", "yellow"),
     "stale": ("○", "bold red"),
     "unknown": ("·", "dim"),
