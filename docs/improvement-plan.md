@@ -258,6 +258,11 @@ materialised options.
 Touches `_render_rows`, `_row_for`, `_retitle` and `_index_of`; the unread divider
 needs a clipped position with a count when the boundary falls outside the window.
 Cursor restore by option id is unchanged.
+*Done:* the window is stretched to hold the cursor, so a key restored from
+outside it still has an option to sit on; it closes again when the filter
+changes and not when a message arrives; and `G` goes through a `Timeline`
+subclass overriding `action_last`, which is the only place a `ui.vim` motion is
+overridden and keeps the rest of the table widget-agnostic.
 *Tests:* a 3000-row fixture materialises `K + chrome` options; selecting the last
 option extends the window; a filter matching an old row shows it; the divider
 reports the right count when clipped.

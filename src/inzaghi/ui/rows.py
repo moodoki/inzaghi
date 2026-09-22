@@ -353,3 +353,29 @@ def divider_label(count: int, width: int = 4) -> str:
     """``──── 3 new above ────`` -- "above" because the newest is at the top."""
     rule = "─" * width
     return f"[dim]{rule}[/] [b]{count} new above[/] [dim]{rule}[/]"
+
+
+def clip_divider(
+    divider: tuple[int, int] | None, rows: list[Row], window: int
+) -> tuple[int, int] | None:
+    """Where the divider goes when only the first ``window`` rows are built.
+
+    A divider sitting past the fold cannot be drawn where it belongs, and
+    drawing nothing would say the opposite of what is true -- that there is
+    nothing new. So it moves to the fold and counts what is above it, which is
+    the same sentence about the part of the channel on screen. The unread rows
+    below stay below, and arrive with their own divider when the window grows.
+    """
+    if divider is None:
+        return None
+    index, _ = divider
+    if index < window:
+        return divider
+    above = sum(1 for row in rows[:window] if row.unread)
+    return (window - 1, above) if above else None
+
+
+def older_label(count: int, step: int, width: int = 4) -> str:
+    """``──── 1,203 older · enter for 400 more ────``, the foot of the window."""
+    rule = "─" * width
+    return f"[dim]{rule}[/] [b]{count:,} older[/] [dim]· enter for {step:,} more {rule}[/]"

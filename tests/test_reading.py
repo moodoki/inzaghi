@@ -46,8 +46,17 @@ def count_renders(pane, monkeypatch) -> list[int]:
 
 @pytest.fixture
 def reading(channel_root):
-    """An app with an old entry selected, as if someone were reading it."""
-    return make_app(channel_root)
+    """An app with an old entry selected, as if someone were reading it.
+
+    With the timers turned right down: every test here drives the refresh
+    itself, on a clock it chose, and counts the rebuilds that follow. A poll
+    landing between the call and the assertion is a rebuild nobody asked for
+    and the count is then off by one, which is a flake rather than a finding.
+    """
+    app = make_app(channel_root)
+    app.config.poll_seconds = 3600.0
+    app.config.discover_seconds = 3600.0
+    return app
 
 
 async def test_the_cursor_does_not_move_as_relative_times_tick(reading, monkeypatch):
