@@ -11,7 +11,7 @@ from . import parse
 
 #: ``offline`` is about the link rather than the session: nothing has
 #: reached this end recently, so the folder cannot be read as evidence.
-Health = Literal["fresh", "late", "stale", "unknown", "offline"]
+Health = Literal["fresh", "paused", "late", "stale", "unknown", "offline"]
 Direction = Literal["in", "out"]
 #: Whether a delivered file has arrived yet, or was refused on sight.
 Arrival = Literal["here", "syncing", "refused"]
@@ -188,6 +188,10 @@ class Heartbeat:
     updated: datetime | None
     next_by: datetime | None
     state: str | None
+    #: When a session that has stopped on purpose expects to be back. A usage
+    #: limit, a maintenance window, a human it is waiting for: the silence
+    #: that follows is explained, and an explained silence is not an alarm.
+    paused_until: datetime | None = None
 
     @classmethod
     def from_doc(cls, doc: Doc) -> "Heartbeat":
@@ -205,7 +209,17 @@ class Heartbeat:
             *(v for k, v in bullets.items() if "next update" in k or k == "next"),
         )
         state = doc.meta.get("state") or bullets.get("state")
-        return cls(doc=doc, updated=updated, next_by=next_by, state=state)
+        paused_until = _first_ts(
+            doc.meta.get("paused_until"),
+            *(v for k, v in bullets.items() if k.startswith("paused")),
+        )
+        return cls(
+            doc=doc,
+            updated=updated,
+            next_by=next_by,
+            state=state,
+            paused_until=paused_until,
+        )
 
     @property
     def interval(self) -> timedelta | None:
@@ -220,12 +234,29 @@ class Heartbeat:
         late = now - self.next_by
         return late if late > timedelta(0) else None
 
+    def paused(self, now: datetime) -> bool:
+        """Whether the session said it would be away, and still has time left.
+
+        A pause that has run out is not a pause: a session which said it would
+        be back at 15:40 and was not is exactly as late as one that said
+        nothing, and the clock goes back to answering for it.
+        """
+        return self.paused_until is not None and now < self.paused_until
+
     def health(self, now: datetime, grace: timedelta = DEFAULT_GRACE) -> Health:
         """Liveness, allowing ``grace`` for the update to make it across the sync.
 
         ``overdue_by`` stays truthful -- the countdown should say what the clock
         says. Only the judgement of whether that is a problem is softened.
+
+        A declared pause outranks the deadline, because it *is* a statement
+        about the deadline: the three silences a watcher cannot otherwise tell
+        apart are dead, wedged, and waiting on something it cannot control,
+        and only the session knows which. It is trusted no further than the
+        moment it named.
         """
+        if self.paused(now):
+            return "paused"
         if not self.next_by:
             return "unknown"
         late = now - self.next_by
@@ -413,6 +444,10 @@ class Snapshot:
         """
         now = now or self.scanned_at
         session = self.session_health(now)
+        # ``paused`` is not in that set on purpose. It is a statement about a
+        # moment in the future, which a link that has stopped arriving does
+        # not make any less true -- and when the moment passes, the heartbeat
+        # is late like any other and the rule below catches it then.
         if session in {"late", "stale", "unknown"} and self.link_health(now) in {"late", "stale"}:
             return "offline"
         return session
@@ -433,6 +468,8 @@ class Snapshot:
             loud = [event for event in loud if str(event.path) in unread]
         # ``offline`` is included: being unable to see a channel is its own
         # reason to want someone, and the one the folder cannot report itself.
+        # ``paused`` is not: a session that said it would be away is the one
+        # silence that has already been accounted for.
         wrong = self.health(now) in {"late", "stale", "offline"}
         return bool(self.waiting or wrong or loud)
 

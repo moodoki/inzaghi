@@ -83,8 +83,41 @@ All three live in `notifications/`, beside the log.
 **`notifications/HEARTBEAT.md`** is the one that matters most, because it is
 the only way a dead session is distinguishable from a quiet one. Refresh it on
 a timer of its own — every 30 min or less — **independently of whatever job is
-running**. If it can only be refreshed by a wakeup that a stuck job
-prevents, it is not a heartbeat. Always state when the next update is due.
+running**, and independently of *you*. Always state when the next update is
+due.
+
+A heartbeat you write at the top of your turn reports on your turn. It stops
+when the turn runs long, when you hit a usage limit, when you are waiting on a
+human — none of which is a dead session, and every one of which reads as one at
+the other end. Put the writing somewhere that keeps going while you are
+thinking, paused or rate-limited: a `systemd` timer, a cron line, or a loop
+started once and left in the background —
+
+```bash
+while sleep 300; do
+  now=$(date -Iseconds)
+  printf '# heartbeat\n\n- **updated:** %s\n- **next update expected by:** %s\n- **state:** %s\n' \
+    "$now" "$(date -Iseconds -d '+10 min')" "$(cat .hb-state 2>/dev/null || echo running)" \
+    > notifications/.hb.tmp && mv notifications/.hb.tmp notifications/HEARTBEAT.md
+done &
+```
+
+— and then write one line into `.hb-state` when you have something to say,
+instead of writing the file yourself. Set this up when you set the channel up;
+it is the difference between a heartbeat that answers "is the session alive"
+and one that answers "did the agent get a turn recently".
+
+If you cannot hold a background process, write the file yourself at every
+wakeup as before, and say so in `state:` — a heartbeat that only moves when you
+do is worth more than none, as long as nobody mistakes it for more than it is.
+
+**When you are about to go quiet on purpose, say so.** A usage limit with a
+reset time, a maintenance window, a person you are blocked on: add
+`- **paused until:** <ISO-8601 timestamp>` to the heartbeat, with the reason in
+`state:`, before you stop. The watcher then shows the channel as paused until
+that moment rather than raising an alarm. Past it, the silence counts against
+you again, so name a time you will actually be back by — and write a normal
+heartbeat as soon as you are.
 
 **`notifications/STATUS.md`** is where the run is right now: what is running,
 which phase, an ETA, the last commit. Keep it short and current. It must
@@ -186,7 +219,8 @@ Anything else is a free-form instruction to be read and acted on.
 - Plain UTF-8 Markdown. ISO-8601 timestamps with an offset.
 - Never edit or delete a file in `inbox/` other than by moving it to `done/`.
 - Optionally open any file with a flat YAML front-matter block (`kind`, `ts`,
-  `next_by`, `needs_reply`); it takes precedence over the filename and prose.
+  `next_by`, `needs_reply`, and `paused_until` on the heartbeat); it takes
+  precedence over the filename and prose.
   On the three overwritten files, `ts` is read as the time of that update, so
   it stands in for an `updated:` bullet rather than being ignored beside one.
 

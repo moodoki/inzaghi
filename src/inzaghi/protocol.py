@@ -12,7 +12,10 @@ from pathlib import Path
 
 from .channel import Channel, is_channel
 
-PROTOCOL_VERSION = 2
+#: Bumped when the text below changes in a way a session should re-read.
+#: Every change so far has been an addition, so a channel still carrying an
+#: older README is not broken by one -- ``inz init --force`` is what rewrites it.
+PROTOCOL_VERSION = 3
 
 CHANNEL_README = """\
 # {name} — unattended-run channel
@@ -42,7 +45,35 @@ Three files are **overwritten** at every wakeup:
 * `HEARTBEAT.md` — liveness, independent of any job, so a dead session is
   visible. Key lines, as bullets:
   `- **updated:** <now>`, `- **next update expected by:** <now + interval>`,
-  `- **state:** <one line>`.
+  `- **state:** <one line>`, and, when the session has stopped on purpose,
+  `- **paused until:** <when it expects to be back>`.
+
+  Write it from something that is not the agent. A heartbeat the agent writes
+  at the top of its turn reports on the agent's turn: it stops when the turn
+  runs long, when a usage limit is reached, when the model is waiting on a
+  human — none of which is a dead session, and all of which read as one. A
+  timer, a cron line or a shell loop bound to the harness process keeps
+  writing through all of it:
+
+  ```bash
+  while sleep 300; do
+    now=$(date -Iseconds)
+    printf '# heartbeat\n\n- **updated:** %s\n- **next update expected by:** %s\n- **state:** %s\n' \
+      "$now" "$(date -Iseconds -d '+10 min')" "$(cat .state 2>/dev/null || echo running)" \
+      > notifications/.hb.tmp && mv notifications/.hb.tmp notifications/HEARTBEAT.md
+  done &
+  ```
+
+  The agent then only supplies `state:` — a line in a file the loop reads —
+  when it has something to say. This is a recommendation, not a requirement: a
+  channel whose agent writes its own heartbeat is a valid channel. It is just
+  one whose heartbeat answers a narrower question than the watcher is asking.
+
+  **`paused until:`** is how a session that is about to go quiet says so: a
+  usage limit with a reset time, a maintenance window, a human it is blocked
+  on. The watcher shows a paused channel as paused until that moment and does
+  not raise an alarm; after it, the silence is late like any other. Put the
+  reason in `state:`.
 * `TASK_OVERVIEW.md` — progress across the whole project, one row per task.
 
 Everything else is an **append-only log**, one file per event, named
@@ -134,6 +165,9 @@ next_by: 2026-09-05T06:57:46+08:00
 needs_reply: true
 ---
 ```
+
+On `HEARTBEAT.md`, `paused_until:` is read the same way as the
+`- **paused until:**` bullet above, and means the same thing.
 
 It is entirely optional; a channel that never emits it works the same. On the
 three overwritten files, `ts` is read as the time of that update — the same

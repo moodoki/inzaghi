@@ -316,10 +316,11 @@ and the agent only supplies `state:` when it has something to say. That also
 fixes BRAVO's case above, which has nothing to do with usage limits: a long turn
 stops being a liveness event at all.
 
-*Decisions this needs:* whether the viewer gains a paused state (it changes what
-the `◍`/`○` marks mean and what `attention()` counts), and whether the contract
-*requires* an independent writer or merely recommends one. Requiring it makes
-every existing session non-compliant until it is updated.
+*Decided:* the viewer gains a paused state, and the contract *recommends* an
+independent writer rather than requiring one — so every channel already running
+stays compliant, and the sessions that get it right spread by example rather
+than by breakage. `PROTOCOL_VERSION` goes to 3; both changes are additions, so a
+channel carrying a v2 README is not broken by them.
 
 ### Phase 7 — the inbox carries attachments (issue #12)
 

@@ -459,7 +459,11 @@ class ChannelPane(Vertical):
         parts = [f"[{colour}]{mark}[/]"]
         if heartbeat:
             parts.append(f"heard {fmt.ago(heartbeat.updated, now)}")
-            parts.append(f"[{colour}]{fmt.countdown(heartbeat.next_by, now)}[/]")
+            if snapshot.health(now) == "paused":
+                back = fmt.clock(heartbeat.paused_until, now)
+                parts.append(f"[{colour}]paused, back {back}[/]")
+            else:
+                parts.append(f"[{colour}]{fmt.countdown(heartbeat.next_by, now)}[/]")
             if heartbeat.state:
                 parts.append(f"[dim]{escape(heartbeat.state)}[/]")
         else:
