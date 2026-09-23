@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+from dataclasses import replace
 from datetime import datetime
 from itertools import count
 from pathlib import Path
@@ -41,6 +42,12 @@ from .volume import VolumePool, WorkerPool
 OVERVIEW_ID = "overview"
 #: Inside OverviewPane; its presence answers for the whole overview subtree.
 OVERVIEW_TABLE = "#overview-table"
+
+#: How a scan that raised is written into the snapshot it could not replace.
+#: A prefix rather than a flag, because ``Snapshot.problems`` is a list of
+#: sentences the strip prints, and this one has to be findable again to be
+#: replaced on the next failure.
+SCAN_FAILED = "scan failed: "
 
 #: Which way ``ctrl+w`` and a key means to move the keyboard.
 PANES = {"h": "left", "j": "down", "k": "up", "l": "right"}
@@ -192,7 +199,7 @@ class InzaghiApp(App):
         asyncio.get_running_loop().set_default_executor(self._worker_pool)
         self.prune_receipts(self.config, set())
         self.rescan()
-        self.set_interval(self.config.poll_seconds, self.rescan)
+        self.set_interval(self.config.poll_seconds, self._poll)
         self.set_interval(self.config.discover_seconds, self.rediscover)
         self.set_interval(1.0, self._tick)
 
@@ -216,7 +223,11 @@ class InzaghiApp(App):
         """Re-read the config, look for new channels, and rescan every folder."""
         self.rediscover()
 
-    def rescan(self) -> None:
+    def _poll(self) -> None:
+        """The interval's own request. Due, rather than urgent -- see ``rescan``."""
+        self.rescan(urgent=False)
+
+    def rescan(self, urgent: bool = True) -> None:
         """Ask for a re-read of every channel, unless one is already out.
 
         A scan reads a volume a sync client owns, and such a read answers when
@@ -231,11 +242,20 @@ class InzaghiApp(App):
         So: one scan in flight, ever. A request that arrives while one is out
         is remembered rather than dropped -- the rescan after a send has to see
         the message it sent -- and runs when the scan comes back.
+
+        Unless it came from the poll, which is ``urgent=False``. The poll is
+        its own retry: the interval goes on firing on its own clock while a
+        sweep is out, so remembering its request only means starting the next
+        sweep the instant the last one landed. On a volume that is slow
+        *because* something is hammering it, that is a reader asking
+        continuously -- the worst thing available -- and it buys nothing the
+        next tick would not bring within ``poll_seconds``. A write's request
+        is remembered as before: nothing else is going to ask for it.
         """
         if self._closing:
             return
         if self._scanning:
-            self._scan_again = True
+            self._scan_again = self._scan_again or urgent
             return
         self._scanning = True
         self._scan()
@@ -252,27 +272,41 @@ class InzaghiApp(App):
         now = datetime.now().astimezone()
         loop = asyncio.get_running_loop()
         try:
-            scanned = await loop.run_in_executor(self._volume, self._read_channels, now)
+            scanned, failed = await loop.run_in_executor(
+                self._volume, self._read_channels, now
+            )
         finally:
             # A scan that was cancelled, or that failed, must not leave the
             # door shut behind it. The thread it left may still be blocked --
             # the pool is bounded for exactly that -- but the next poll is
             # allowed to try.
             self._scanning = False
-        self._apply(scanned, now)
+        self._apply(scanned, failed, now)
         if self._scan_again:
             self._scan_again = False
             self.rescan()
 
-    def _read_channels(self, now: datetime) -> dict[str, Snapshot]:
-        """Every channel, read on a volume thread. Never on the UI's."""
+    def _read_channels(self, now: datetime) -> tuple[dict[str, Snapshot], dict[str, str]]:
+        """Every channel, read on a volume thread. Never on the UI's.
+
+        One channel is allowed to fail without taking the others, or the app,
+        with it. ``OSError`` is the expected failure -- a mount that went away
+        -- and anything else is a bug, but a bug in one channel's scan is
+        still not a reason to lose the session watching six others: this
+        worker is a ``@work`` with ``exit_on_error`` left at its default, so
+        an exception escaping here closes the app. The convention that a
+        session which drifts from the format makes one widget go quiet rests
+        on the parsers degrading to ``None``; this is the same promise kept
+        one level up, where a parser that does not degrade is caught.
+        """
         scanned: dict[str, Snapshot] = {}
+        failed: dict[str, str] = {}
         for channel in list(self.channels):
             try:
                 scanned[channel.key] = channel.scan(now=now)
-            except OSError:
-                continue  # a mount that went away; keep the last good snapshot
-        return scanned
+            except Exception as exc:  # noqa: BLE001 -- see the docstring
+                failed[channel.key] = f"{type(exc).__name__}: {exc}"
+        return scanned, failed
 
     def rediscover(self) -> None:
         """Look for channels that have appeared or gone since the last pass.
@@ -375,13 +409,40 @@ class InzaghiApp(App):
         if pane_id:
             await tabs.remove_pane(pane_id)
 
-    def _apply(self, scanned: dict[str, Snapshot], now: datetime) -> None:
+    def _apply(
+        self, scanned: dict[str, Snapshot], failed: dict[str, str], now: datetime
+    ) -> None:
+        """Take a finished sweep onto the screen.
+
+        Only for channels that are still here: discovery can drop one while
+        the sweep is out, and a snapshot applied after that resurrects a
+        channel nobody is watching and keeps it for the life of the process.
+        """
+        present = {channel.key for channel in self.channels}
+        landed = {key: snapshot for key, snapshot in scanned.items() if key in present}
         self._forget_unread()  # new events are unread events
-        for key, snapshot in scanned.items():
+        for key, snapshot in landed.items():
             self._alert(key, snapshot, now)
-        self.snapshots.update(scanned)
+        self.snapshots.update(landed)
+        for key, problem in failed.items():
+            if key in present:
+                self._scan_failed(key, problem)
         self._refresh_widgets(now)
         self.state.save()
+
+    def _scan_failed(self, key: str, problem: str) -> None:
+        """Say so on the channel's own strip, over the last good snapshot.
+
+        A channel whose scan raised keeps what it last showed -- stale is more
+        use than empty -- with a line on top saying it is stale and why. The
+        note replaces the previous one rather than stacking: a volume that has
+        gone away fails every poll, and the count is not the news.
+        """
+        previous = self.snapshots.get(key)
+        if previous is None:
+            return  # never scanned successfully; there is nothing to annotate
+        kept = [p for p in previous.problems if not p.startswith(SCAN_FAILED)]
+        self.snapshots[key] = replace(previous, problems=[*kept, SCAN_FAILED + problem])
 
     def _forget_unread(self) -> None:
         """Something moved a receipt, a snapshot or a channel; recompute."""

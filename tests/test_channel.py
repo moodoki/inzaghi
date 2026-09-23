@@ -321,6 +321,14 @@ def test_a_rewrite_the_modification_time_missed_is_still_noticed(channel, channe
     body = entry.read_text(encoding="utf-8").replace("Checksums", "Cheqsumzz")
     entry.write_text(body, encoding="utf-8")
     os.utime(entry, (was.st_atime, was.st_mtime))
+    # ext4 stamps ctime from a clock that only moves on the timer tick, so a
+    # rewrite in the same tick as the scan before it carries the *same* ctime
+    # and is genuinely indistinguishable -- which is a fact about writing a
+    # file twice in a millisecond, not about the cache. A rewrite arriving
+    # over a sync client is never that quick, so nudge it into the next tick
+    # rather than assert something no stat could have told us.
+    while entry.stat().st_ctime_ns == was.st_ctime_ns:
+        os.utime(entry, (was.st_atime, was.st_mtime))
     assert entry.stat().st_size == was.st_size and entry.stat().st_mtime == was.st_mtime
 
     (milestone,) = [e for e in channel.scan(now=NOW).events if e.kind == "milestone"]

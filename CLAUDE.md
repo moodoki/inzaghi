@@ -48,7 +48,12 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
 ## Conventions
 
 - Parsers degrade to `None`; a session that drifts from the format makes one
-  widget go quiet rather than crashing the app.
+  widget go quiet rather than crashing the app. The scan keeps the same promise
+  one level up, where a parser that failed to degrade is caught: `_read_channels`
+  catches `Exception` per channel, not only the `OSError` a departed mount
+  raises, because the sweep is a `@work` and an exception leaving it closes the
+  app over one channel. What that channel last showed stays on screen, with the
+  failure written into `Snapshot.problems`, which the strip prints.
 - A silence the session explained is not an alarm. `paused_until` on
   `HEARTBEAT.md` -- front matter, or a `- **paused until:**` bullet -- makes
   `health` report `paused` until that moment and keeps the channel out of
@@ -87,8 +92,13 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   leaves the thread where it was. So a poll every two seconds at a volume that
   has gone quiet does not queue scans, it accumulates threads -- and on
   Textual's shared pool that ends with sending, deleting and opening dead too,
-  until the app is restarted. A request that arrives while a scan is out is
-  remembered, not dropped; the rescan after a send has to see the send.
+  until the app is restarted. A write's request that arrives while a scan is
+  out is remembered, not dropped: the rescan after a send has to see the send,
+  and nothing else is going to ask for it. The poll's own request is dropped,
+  because the interval goes on firing while the sweep is out and the next tick
+  asks again -- remembering it means starting the next sweep the instant the
+  last one landed, which on a volume that is slow *because* it is busy is a
+  reader asking continuously.
 - Both pools are daemon threads of our own (`ui/volume.py`), because quitting
   has to be allowed to abandon a read that has wedged. A `ThreadPoolExecutor`
   never is: `shutdown(wait=False)` declines to wait and then the interpreter
@@ -191,6 +201,20 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
 - The timeline rebuilds only when the *rows* change, never when their labels
   do — labels carry relative times and churn every poll. Restore the cursor by
   option id, not index: the list also holds separators and the divider.
+- And only the first `WINDOW_ROWS` of them are built. A month-old channel runs
+  to thousands of entries and nobody reads to the bottom of one, but every
+  rebuild, tab switch and search pays for every row that exists. What is built
+  is the window stretched to hold the cursor — a key restored from outside it
+  would otherwise have no option to sit on, and a cursor with nowhere to sit
+  jumps to the top. The foot of the window is an option with no id, because
+  everything that restores a cursor or shows a document goes looking by key;
+  `G` is the one motion that names the far end out loud, so `Timeline` is the
+  one widget that overrides a `ui.vim` motion, and it materialises the rest
+  before it goes there. The window closes again when the *filter* changes,
+  never when a message arrives: a new entry must not shut a window someone
+  opened. A divider that falls past the fold moves to the fold and counts what
+  is above it, which is the same sentence about the part of the channel that
+  is on screen.
 - The rows themselves are only *built* when building them would produce
   something different: the channel's content compared against what they were
   built from, and `fmt.next_change` for the moment a relative label is next
