@@ -12,10 +12,9 @@ from pathlib import Path
 
 from .channel import Channel, is_channel
 
-#: Bumped when the text below changes in a way a session should re-read. v3
-#: added the paused state and said where the heartbeat should be written from;
-#: both are additions, so a channel still carrying a v2 README is not broken by
-#: it -- ``inz init --force`` is what rewrites one.
+#: Bumped when the text below changes in a way a session should re-read.
+#: Every change so far has been an addition, so a channel still carrying an
+#: older README is not broken by one -- ``inz init --force`` is what rewrites it.
 PROTOCOL_VERSION = 3
 
 CHANNEL_README = """\
