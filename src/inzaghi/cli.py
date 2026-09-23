@@ -20,6 +20,7 @@ from .config import Config
 from .protocol import init_channel
 from .skill import HARNESSES, UnknownHarness, install as install_skill, sync_reference
 from .state import ReadState
+from .supervise import DEFAULT_INTERVAL
 
 HEALTH_MARK = {"fresh": "●", "late": "◍", "stale": "○", "unknown": "·"}
 
@@ -106,6 +107,25 @@ def _parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="print the rsync commands without running them"
     )
     sync.set_defaults(handler=_cmd_sync)
+
+    supervise = sub.add_parser(
+        "supervise",
+        help="poke a session that has stopped reading its inbox",
+    )
+    supervise.add_argument(
+        "channel", nargs="*", help="names to supervise; default is every one configured"
+    )
+    supervise.add_argument(
+        "--once", action="store_true", help="one pass and exit, for cron"
+    )
+    supervise.add_argument(
+        "--dry-run", action="store_true", help="say what would be poked, and poke nothing"
+    )
+    supervise.add_argument(
+        "--interval", type=float, default=DEFAULT_INTERVAL,
+        help=f"seconds between passes when resident (default {DEFAULT_INTERVAL:g})",
+    )
+    supervise.set_defaults(handler=_cmd_supervise)
 
     return parser
 
@@ -254,6 +274,39 @@ def _cmd_sync(args, config: Config) -> int:
         retired = f", retired {len(outcome.retired)}" if outcome.retired else ""
         print(f"{name}: synced{retired}")
     return 1 if failed else 0
+
+
+def _cmd_supervise(args, config: Config) -> int:
+    """Watch every configured inbox from outside the sessions that own them.
+
+    Resident by default, because that is what it is for: a session cannot be
+    relied on to notice its own mail, and neither can a supervisor that only
+    runs when someone remembers. ``--once`` is for a cron line instead.
+    """
+    from . import supervise as sup
+
+    def say(report: sup.Report) -> None:
+        line = f"{sup.stamp()} {report.channel}: {report.action}"
+        if report.waiting:
+            line += f" ({report.waiting} waiting)"
+        if report.detail and report.action != "poked":
+            line += f" — {report.detail}"
+        print(line, flush=True)
+
+    if args.once or args.dry_run:
+        reports = sup.sweep(config, names=args.channel or None, dry_run=args.dry_run)
+        for report in reports:
+            say(report)
+        if not reports:
+            print(f"{sup.stamp()} every inbox is clear", flush=True)
+        return 1 if any(r.action in {"failed", "error"} for r in reports) else 0
+
+    print(f"{sup.stamp()} supervising every {args.interval:g}s; ctrl-c to stop", flush=True)
+    try:
+        sup.watch(config, names=args.channel or None, interval=args.interval, on_report=say)
+    except KeyboardInterrupt:
+        print(f"\n{sup.stamp()} stopped", flush=True)
+    return 0
 
 
 def _resolve(token: str, config: Config) -> Channel | None:

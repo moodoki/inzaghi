@@ -114,6 +114,18 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   `CACHE_SECONDS` is read again regardless. When the text that comes back
   disagrees with the stamp describing it, the text wins -- a re-read the clock
   had to ask for is precisely the one whose stat never moved.
+- `supervise` is the only part of this that reaches *out* of the channel, and
+  it is deliberately dumb: it lists inboxes, pokes whoever owns one that has
+  gone unread, records that it poked, and reads nothing. It exists because
+  every watcher a session can build is started by that session, so none of
+  them recovers a turn that ended with nothing armed -- three channels lost
+  mail that way in one night, three different ways. The rule that governs it
+  is that a poke is keystrokes: `pane_refusal` reads the pane first and
+  refuses one that might be asking its user something, because the Enter
+  behind our text would answer it, and that decision is never ours. A refusal
+  is not recorded as a poke, so the next pass retries once a human has
+  answered. It writes nothing into a channel, for the same reason nothing else
+  here does.
 - Two places delete: `channel.remove_conflicts` and `transport.retire`. Both
   re-validate every path at the moment of unlinking rather than trusting the
   listing they started from, and neither takes its decision from a fuzzy key --

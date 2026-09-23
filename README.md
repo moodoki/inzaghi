@@ -297,6 +297,85 @@ all of it is here. Cycles lock against each other with `fcntl` — a 600 MB
 attachment outlasts a two-minute cron — and a channel marked `read_only`
 refuses to sync at all, since pulling writes into the folder.
 
+## When nobody is reading the inbox
+
+A message only works if something reads it, and on this side that is out of
+your hands: the session decides when it looks. Every mechanism a session can
+build to notice one — a watcher, a poll, a tick — is *started by the session*,
+which means none of them can recover once a turn ends with nothing armed. Over
+one night across seven channels that failed three different ways: a watcher
+that exited on a quiet timeout meaning to be re-armed and never was; one that
+survived but lost its event in the gap between two arms and sat alive and deaf;
+and one whose fallback listing was hung off the watcher's own notification, so
+when the watcher died the safety net could never fire either.
+
+They share a shape. The thing that would notice is downstream of the thing that
+broke. So the second layer belongs outside the session entirely:
+
+```sh
+inz supervise                  # resident, every 30s
+inz supervise --once           # one pass, for cron
+inz supervise --dry-run        # say what would be poked, poke nothing
+```
+
+It lists each configured inbox, and when one has held a message longer than
+`nudge_after_seconds` it pokes the session that owns it. It also pokes a
+session that has **stopped at a usage limit**, whether or not anything is
+waiting: a limit kills nothing — the process, the watchers and the folder are
+all fine — it just means nothing will happen in that session again, and
+nothing tells it when the limit has reset. The poke is what restarts it. Sent
+before the reset it costs one turn that ends the way the last one did; sent
+after, the session picks up where it stopped. Both cases are held to
+`nudge_every_seconds`, so a session waiting out a three-hour limit is asked
+twelve times, not four hundred.
+
+```toml
+[[channels]]
+path = "~/sync/channels/northwind"
+name = "northwind"
+tmux = "work:1.0"                  # the pane that session runs in
+```
+
+`tmux` is anything `tmux send-keys -t` accepts. For a session that is not in a
+pane, `nudge` is an argv list run instead — no shell — with `{name}`, `{path}`,
+`{count}` and `{message}` substituted:
+
+```toml
+nudge = ["/usr/local/bin/wake-session", "--channel", "{name}", "--say", "{message}"]
+```
+
+A channel with neither is reported as **unsupervised** rather than passed over,
+because "nothing to report" and "no way to report it" must not look the same.
+
+Two numbers shape it. `nudge_after_seconds` (180) is how long a message may
+sit before this steps in — long enough that a session mid-turn reaches its own
+inbox first, since poking one that was about to look anyway is just noise.
+`nudge_every_seconds` (900) is how long before the same channel is poked again:
+a session that is busy, wedged or waiting on a human does not become less so
+for being told twice, and a supervisor that repeats every pass is one you turn
+off.
+
+**It never answers a question.** A poke is keystrokes, and the last line of a
+pane decides what they mean — typing into a session that is asking its user
+something puts the text where the answer goes, and the Enter behind it submits
+one. So the pane is read first, and one that looks like it is asking anything
+is skipped and said to be skipped. A pane that cannot be read at all is skipped
+too: if we cannot see what we are typing into, we do not type. Neither case is
+recorded as a poke, so the next pass tries again once the question has been
+answered by the person it was put to. A limit notice does not license an
+Enter either: a session can be stalled *and* holding a question, and the
+refusal wins while the stall is still what gets reported.
+
+**What it does not cover.** A watcher inside a session dies when that session
+exits, because it is a child of it — so the supervisor is the layer that
+survives, and it should be started by something that outlives the sessions
+too: a systemd user service, or a shell detached with `setsid`. A usage limit
+does not kill a watcher, only the session's ability to act on what it sees.
+
+And it never writes into a channel. A supervisor that did would be one more
+thing racing the session it is supervising; the record of what it poked and
+when lives in the state directory with the read receipts.
+
 ## When the link is the problem, not the session
 
 A silent folder means a dead session only if the folder is still arriving.
@@ -479,6 +558,6 @@ regenerates). Supporting another harness is one entry in `skill.HARNESSES`.
 
 Working: overview, per-channel tabs, timeline, reader, composer, quick actions,
 search and kind filtering, live discovery, and the `inzaghi ls | init | send |
-status | sync` commands, the since-last-read divider, sync-conflict cleanup,
-delivered files, ssh transport with a link-health marker, and the session-side
-skill.
+status | sync | supervise` commands, the since-last-read divider,
+sync-conflict cleanup, delivered files, ssh transport with a link-health
+marker, the inbox supervisor, and the session-side skill.
