@@ -319,9 +319,9 @@ inz supervise --dry-run        # say what would be poked, poke nothing
 ```
 
 It lists each configured inbox, and when one has held a message longer than
-`nudge_after_seconds` it pokes the session that owns it. It also pokes a
-session that has **stopped at a usage limit**, whether or not anything is
-waiting: a limit kills nothing — the process, the watchers and the folder are
+`nudge_after_seconds` it pokes the session that owns it. It also pokes a session that has **stopped at a usage limit** — one whose
+heartbeat is past the `next update expected by` it published, *and* whose pane
+says why — whether or not anything is waiting: a limit kills nothing — the process, the watchers and the folder are
 all fine — it just means nothing will happen in that session again, and
 nothing tells it when the limit has reset. The poke is what restarts it. Sent
 before the reset it costs one turn that ends the way the last one did; sent
@@ -363,20 +363,25 @@ and stays there, so a pattern matched against the whole pane matches the
 supervisor's own message on the next pass — a supervisor detecting itself, once
 per interval, for as long as the scrollback holds. That is not hypothetical: it
 sent 105 stall pokes across five channels that way, four of which had never
-stalled at all. Four things stop it now, and the first is the one that cannot
-come loose:
+stalled at all. Three things stop it now:
 
 - the message says nothing a stall is detected by, so it cannot report itself;
 - what it did say is removed from the capture before anything is matched, found
   character by character because a terminal wraps mid-word as readily as
   between two;
-- the words alone are not enough — the pane must also be *unchanged* since the
-  last look, since a session that is working prints something;
-- and a stall is poked on the edge, so even a false one costs one message.
+- and a stall is poked on the edge — once, when it appears — so even a false
+  one costs a single message.
 
-The residue is a session writing prose about a limit it survived, which reads
-exactly like a session at one. That is the limit of judging a session by its
-terminal, and it is why the last two brakes are there.
+**And the pane is only ever the reason, never the test.** That is
+`next update expected by`, which every heartbeat publishes for exactly this
+question. A session declares its own cadence — thirty minutes while it idles
+holding a decision, five mid-build, a hundred and fifty through a long
+rehearsal — and no threshold here has to serve all three. Judging silence off
+a terminal instead was wrong three times in one evening, against sessions that
+were minutes inside a window they had published; a detector that cries wolf is
+worse than none, because the next real outage reads like the last false one.
+A channel that promises nothing is never stalled: absence of a promise is not
+a broken one.
 
 **It never answers a question.** A poke is keystrokes, and the last line of a
 pane decides what they mean — typing into a session that is asking its user

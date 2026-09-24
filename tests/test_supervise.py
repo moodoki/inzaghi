@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -329,13 +330,17 @@ def _boom(*args, **kwargs):
 LIMIT = "Claude usage limit reached. Your limit will reset at 3pm."
 
 
-def settle(config, pokes, run, now=NOW):
-    """One sweep to see the pane, so the next can tell it has not moved.
+def promise(root, due: float) -> None:
+    """Write the heartbeat a session publishes, promising an update by ``due``."""
+    when = datetime.fromtimestamp(due).astimezone().isoformat(timespec="seconds")
+    write(
+        root / "notifications" / "HEARTBEAT.md",
+        f"# heartbeat\n\n- **next update expected by:** {when}\n- **state:** working\n",
+    )
 
-    A stall is two things at once -- the words, and nothing happening -- and
-    the second cannot be answered by a single look. That costs one pass, and
-    it is the reason a session that is merely slow is not called stalled.
-    """
+
+def settle(config, pokes, run, now=NOW):
+    """Kept for the tests written before the deadline gate replaced it."""
     return sup.sweep(config, now=now, pokes=pokes, run=run)
 
 
@@ -344,7 +349,7 @@ def test_a_stalled_session_is_roused_even_with_an_empty_inbox(supervised, tmp_pa
     happen again until something asks."""
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
-    assert settle(config, pokes, Recorder(LIMIT)) == []  # the first look only
+    promise(channel.root, NOW - 600)  # it promised an update ten minutes ago
 
     (report,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
@@ -352,12 +357,42 @@ def test_a_stalled_session_is_roused_even_with_an_empty_inbox(supervised, tmp_pa
     assert pokes.at[channel.key] == NOW
 
 
-def test_a_pane_that_is_still_moving_is_not_stalled(supervised, tmp_path):
-    """The words are not enough: a session doing something prints something."""
-    config, _ = supervised
-    pokes = sup.Pokes(tmp_path / "p.json")
-    settle(config, pokes, Recorder(LIMIT + "\n● step 1"))
-    assert sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT + "\n● step 2")) == []
+def test_a_session_inside_the_window_it_published_is_not_stalled(supervised, tmp_path):
+    """The defect three sessions reported in one evening.
+
+    A self-paced session is legitimately quiet between ticks -- thirty minutes
+    while it idles, five mid-build -- and the heartbeat says which. Poking one
+    that is minutes inside its own window is crying wolf, and the cost is that
+    the next real outage reads like the last three false ones.
+    """
+    config, channel = supervised
+    promise(channel.root, NOW + 1_800)  # not due for another half hour
+    assert sup.sweep(config, now=NOW, pokes=sup.Pokes(tmp_path / "p.json"),
+                     run=Recorder(LIMIT)) == []
+
+
+def test_a_channel_that_promised_nothing_is_not_stalled(supervised, tmp_path):
+    """Absence of a promise is not a broken one."""
+    config, channel = supervised
+    write(channel.root / "notifications" / "HEARTBEAT.md", "# heartbeat\n\n- **state:** up\n")
+    assert sup.sweep(config, now=NOW, pokes=sup.Pokes(tmp_path / "p.json"),
+                     run=Recorder(LIMIT)) == []
+
+
+def test_the_grace_covers_a_deadline_that_has_only_just_passed(supervised, tmp_path):
+    """The file crosses a sync client to reach us, as everything else here does."""
+    config, channel = supervised
+    promise(channel.root, NOW - 30)
+    assert sup.sweep(config, now=NOW, pokes=sup.Pokes(tmp_path / "p.json"),
+                     run=Recorder(LIMIT)) == []
+
+
+def test_an_overdue_session_saying_nothing_about_a_limit_is_left_alone(supervised, tmp_path):
+    """Late is the viewer's business to show; a poke needs a reason as well."""
+    config, channel = supervised
+    promise(channel.root, NOW - 6_000)
+    assert sup.sweep(config, now=NOW, pokes=sup.Pokes(tmp_path / "p.json"),
+                     run=Recorder("● still working on it\n")) == []
 
 
 def test_rousing_never_says_the_words_that_detect_a_stall(supervised):
@@ -383,7 +418,7 @@ def test_a_stalled_session_is_not_roused_twice_in_the_interval(supervised, tmp_p
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
     pokes.record(channel.key, NOW - 60)
-    settle(config, pokes, Recorder(LIMIT))
+    promise(channel.root, NOW - 600)
 
     (report,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
@@ -396,7 +431,7 @@ def test_a_stalled_session_is_roused_again_once_the_interval_passes(supervised, 
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
     pokes.record(channel.key, NOW - 1000)
-    settle(config, pokes, Recorder(LIMIT))
+    promise(channel.root, NOW - 600)
 
     (report,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
@@ -425,7 +460,7 @@ def test_a_stalled_pane_that_is_also_asking_something_is_still_refused(supervise
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
     pane = LIMIT + "\nDo you want to proceed?\n ❯ 1. Yes"
-    settle(config, pokes, Recorder(pane))
+    promise(channel.root, NOW - 600)
 
     (report,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(pane))
 
@@ -488,7 +523,7 @@ def test_a_stall_is_poked_once_and_not_again_while_it_lasts(supervised, tmp_path
     """A session coming back answers the first; a wedged one answers none."""
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
-    settle(config, pokes, Recorder(LIMIT))
+    promise(channel.root, NOW - 600)
 
     (first,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
     assert first.action == "poked (stall)"
@@ -500,11 +535,13 @@ def test_a_stall_is_poked_once_and_not_again_while_it_lasts(supervised, tmp_path
 def test_a_stall_that_clears_and_returns_is_poked_again(supervised, tmp_path):
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
-    settle(config, pokes, Recorder(LIMIT))
+    promise(channel.root, NOW - 600)
     sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
+    # It came back, wrote a heartbeat, and promised again -- the stall clears.
+    promise(channel.root, NOW + 6_000)
     sup.sweep(config, now=NOW + 4_000, pokes=pokes, run=Recorder("● working\n❯ \n"))
-    sup.sweep(config, now=NOW + 5_000, pokes=pokes, run=Recorder(LIMIT))
+    # Then missed that one too.
     (again,) = sup.sweep(config, now=NOW + 10_000, pokes=pokes, run=Recorder(LIMIT))
 
     assert again.action == "poked (stall)"
@@ -514,7 +551,7 @@ def test_the_edge_survives_a_restart(supervised, tmp_path):
     """The supervisor is meant to be restarted; a stall must not re-fire for it."""
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
-    settle(config, pokes, Recorder(LIMIT))
+    promise(channel.root, NOW - 600)
     sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
     reloaded = sup.Pokes.load(tmp_path / "p.json")
@@ -526,7 +563,7 @@ def test_mail_is_still_poked_while_a_stall_is_held(supervised, tmp_path):
     """The two are different questions: unread mail is not answered by silence."""
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
-    settle(config, pokes, Recorder(LIMIT))
+    promise(channel.root, NOW - 600)
     sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
     put(channel.root, "m.md", age=6000)

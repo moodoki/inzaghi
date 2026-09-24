@@ -21,16 +21,16 @@ from __future__ import annotations
 
 import json
 import re
-from hashlib import sha256
 import subprocess
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .channel import Channel
 from .config import Config, state_dir
+from .model import Doc, Heartbeat
 
 #: How every line this sends begins, so that none of it can be read back as
 #: evidence. A poke lands in the pane it was typed into and stays there, so a
@@ -156,11 +156,6 @@ class Pokes:
 
     path: Path
     at: dict[str, float] = field(default_factory=dict)
-    #: A fingerprint of what each channel's pane last looked like, with our
-    #: own words already taken out. A session that is stalled produces no
-    #: output, so a pane that has not moved between two passes is the one
-    #: piece of evidence that does not come from reading words off a screen.
-    seen: dict[str, str] = field(default_factory=dict)
     #: Which channels looked stalled on the last pass. A stall is poked on the
     #: edge -- the pass where it first appears -- and not again while it lasts.
     #: A session that answered has answered the first one; one that is wedged
@@ -178,26 +173,11 @@ class Pokes:
             return cls(path=path)
         at = {str(k): float(v) for k, v in raw.get("at", {}).items() if _number(v)}
         stalled = {str(k): bool(v) for k, v in raw.get("stalled", {}).items()}
-        seen = {str(k): str(v) for k, v in raw.get("seen", {}).items()}
-        return cls(path=path, at=at, stalled=stalled, seen=seen)
+        return cls(path=path, at=at, stalled=stalled)
 
     def record(self, key: str, when: float) -> None:
         self.at[key] = when
         self._dirty = True
-
-    def still(self, key: str, pane: str) -> bool:
-        """True when this pane says exactly what it said last time.
-
-        The first look can never answer it -- there is nothing to compare --
-        which costs one pass before a genuine stall is seen, and is the reason
-        a session that is merely slow to type is not mistaken for one.
-        """
-        mark = sha256(pane.encode("utf-8", "replace")).hexdigest()[:16]
-        was = self.seen.get(key)
-        if was != mark:
-            self.seen[key] = mark
-            self._dirty = True
-        return was == mark
 
     def saw_stall(self, key: str, stalled: bool) -> bool:
         """Note what the pane looks like now; True if this is a rising edge."""
@@ -212,9 +192,7 @@ class Pokes:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
-            {"version": 1, "at": self.at, "stalled": self.stalled, "seen": self.seen},
-            indent=1,
-            sort_keys=True,
+            {"version": 1, "at": self.at, "stalled": self.stalled}, indent=1, sort_keys=True
         )
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(payload, encoding="utf-8")
@@ -237,6 +215,30 @@ def due(waiting: Waiting, last: float | None, now: float, after: float, every: f
 
 
 # -- poking ---------------------------------------------------------------
+
+
+def overdue(channel: Channel, now: float, grace: float) -> bool:
+    """Whether the channel has missed the deadline it set for itself.
+
+    This is the test, and the pane is only the reason. Every heartbeat
+    publishes ``next update expected by`` for exactly this question, so a
+    session declares its own cadence -- thirty minutes while it idles holding
+    a decision, five mid-build, a hundred and fifty through a long rehearsal
+    -- and no threshold of ours has to serve all three. Reading silence off a
+    terminal instead was wrong three times in one evening against sessions
+    that were minutes inside a window they had published.
+
+    No heartbeat, or one that promises nothing, is not evidence of a stall:
+    absence of a promise is not a broken one.
+    """
+    try:
+        doc = Doc.load(channel.notifications_dir / "HEARTBEAT.md")
+    except OSError:
+        return False
+    beat = Heartbeat.from_doc(doc)
+    if beat.next_by is None:
+        return False
+    return datetime.fromtimestamp(now).astimezone() > beat.next_by + timedelta(seconds=grace)
 
 
 def _anywhere(text: str) -> re.Pattern[str]:
@@ -434,11 +436,13 @@ def sweep(
         # Recorded every pass, for every channel with a pane, so that a stall
         # which has cleared re-arms the edge for the next one.
         # Two independent things have to hold before a session is called
-        # stalled: its pane has to say so, and nothing in that pane may have
-        # moved since the last look. The words alone were not enough -- they
-        # were ours, once -- and a session that is working prints something.
-        quiet = pokes.still(channel.key, pane.text) if target else False
-        edge = pokes.saw_stall(channel.key, pane.stalled and quiet) if target else False
+        # stalled. Its own heartbeat has to be past the deadline it published
+        # -- that is the test, and it is the one the contract already answers
+        # -- and its pane has to say why. The words alone were never enough:
+        # they were ours once, and after that they were sessions describing a
+        # limit they had survived.
+        late = pane.stalled and overdue(channel, now, config.heartbeat_grace_seconds)
+        edge = pokes.saw_stall(channel.key, late) if target else False
 
         if waiting is not None:
             why = due(waiting, pokes.at.get(channel.key), now, after, every)
