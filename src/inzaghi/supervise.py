@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha256
 import subprocess
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -87,8 +89,11 @@ class Pane:
 
     #: Why it must not be typed into, or "" when it may be.
     refusal: str = ""
-    #: Whether it looks like a session waiting out a usage limit.
+    #: Whether it says the words a session waiting out a usage limit says.
     stalled: bool = False
+    #: What it said, with our own words removed -- kept so that two looks can
+    #: be compared without reading either of them again.
+    text: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +156,11 @@ class Pokes:
 
     path: Path
     at: dict[str, float] = field(default_factory=dict)
+    #: A fingerprint of what each channel's pane last looked like, with our
+    #: own words already taken out. A session that is stalled produces no
+    #: output, so a pane that has not moved between two passes is the one
+    #: piece of evidence that does not come from reading words off a screen.
+    seen: dict[str, str] = field(default_factory=dict)
     #: Which channels looked stalled on the last pass. A stall is poked on the
     #: edge -- the pass where it first appears -- and not again while it lasts.
     #: A session that answered has answered the first one; one that is wedged
@@ -168,11 +178,26 @@ class Pokes:
             return cls(path=path)
         at = {str(k): float(v) for k, v in raw.get("at", {}).items() if _number(v)}
         stalled = {str(k): bool(v) for k, v in raw.get("stalled", {}).items()}
-        return cls(path=path, at=at, stalled=stalled)
+        seen = {str(k): str(v) for k, v in raw.get("seen", {}).items()}
+        return cls(path=path, at=at, stalled=stalled, seen=seen)
 
     def record(self, key: str, when: float) -> None:
         self.at[key] = when
         self._dirty = True
+
+    def still(self, key: str, pane: str) -> bool:
+        """True when this pane says exactly what it said last time.
+
+        The first look can never answer it -- there is nothing to compare --
+        which costs one pass before a genuine stall is seen, and is the reason
+        a session that is merely slow to type is not mistaken for one.
+        """
+        mark = sha256(pane.encode("utf-8", "replace")).hexdigest()[:16]
+        was = self.seen.get(key)
+        if was != mark:
+            self.seen[key] = mark
+            self._dirty = True
+        return was == mark
 
     def saw_stall(self, key: str, stalled: bool) -> bool:
         """Note what the pane looks like now; True if this is a rising edge."""
@@ -187,7 +212,9 @@ class Pokes:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
-            {"version": 1, "at": self.at, "stalled": self.stalled}, indent=1, sort_keys=True
+            {"version": 1, "at": self.at, "stalled": self.stalled, "seen": self.seen},
+            indent=1,
+            sort_keys=True,
         )
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(payload, encoding="utf-8")
@@ -212,43 +239,56 @@ def due(waiting: Waiting, last: float | None, now: float, after: float, every: f
 # -- poking ---------------------------------------------------------------
 
 
-def theirs(pane: str) -> str:
-    """``pane`` with our own lines removed, which is all that may be read.
+def _anywhere(text: str) -> re.Pattern[str]:
+    """``text``, matchable however a terminal broke it across lines.
 
-    Line by line rather than by a marker, because a pane wraps: a long poke
-    arrives as several lines of which only the first carries the signature,
-    and the rest are ours too. Anything after a signature line is dropped
-    until a line appears that plainly starts something else -- a prompt, or a
-    line the session itself produced.
+    Character by character with whitespace allowed between each, because a
+    pane wraps at the screen edge with no regard for words: the break falls
+    mid-word as readily as between two, and a line-based or word-based
+    comparison misses exactly the cases that matter.
     """
-    kept, ours = [], False
-    for line in pane.splitlines():
-        if SIGNATURE in line:
-            ours = True
-            continue
-        if ours:
-            # A wrapped continuation is indented or bare prose; the session's
-            # own output starts at the left margin with a marker or a prompt.
-            if line[:1] in {"", " "} or not line.strip():
-                continue
-            ours = False
-        kept.append(line)
-    return "\n".join(kept)
+    return re.compile(r"\s*".join(re.escape(c) for c in "".join(text.split())))
+
+
+def theirs(pane: str, spoken: Iterable[str] = ()) -> str:
+    """``pane`` with anything we said taken out, which is all that may be read.
+
+    ``spoken`` is what we might have said to *this* channel. A message only
+    partly on screen leaves a fragment this cannot match, which is the second
+    reason the messages themselves avoid every word being looked for -- the
+    first being that a message describing a stall would report one.
+    """
+    for text in spoken:
+        pane = _anywhere(text).sub(" ", pane)
+    # Whatever follows a signature is a fragment of ours that the wrapping or
+    # the scrollback cut in half, and nothing of the session's is in it.
+    if SIGNATURE in pane:
+        pane = pane.split(SIGNATURE)[0]
+    return pane
 
 
 def rousing(name: str) -> str:
     """The line a stalled session is given, when it has no mail waiting.
 
     Deliberately not an instruction: there is nothing here we know it should
-    be doing. It is a tap on the shoulder saying the model is answering again,
-    and everything about what to do next is in its own context and its own
-    channel.
+    be doing. It is a tap on the shoulder, and what to do next is in its own
+    context and its own channel.
+
+    And deliberately free of every word ``STALLED`` looks for. The message
+    lands in the pane it is typed into and stays there, so a message that
+    described the thing it was reporting would be read back as another report
+    of it. Filtering our own text out of the capture is the belt; this is the
+    braces, and it is the half that cannot come loose -- a message that never
+    contained the evidence cannot manufacture any.
     """
     return (
-        f"Inzaghi supervisor: {name}'s session looks like it stopped at a usage "
-        "limit. If the limit has reset, carry on where you left off — check "
-        "inbox/, then STATUS.md and HEARTBEAT.md, and say in the heartbeat's "
-        "state: line that you were paused and are back."
+        f"{SIGNATURE} nothing has moved in {name}'s session for a while, so "
+        "this is a tap on the shoulder. Check for yourself: if you were paused "
+        "and can run again, carry on where you left off and say so in the "
+        "heartbeat's state: line. If you were not, this was a false positive — "
+        "say that instead, and please tell the Inzaghi session so, because the "
+        "detection is worth fixing and your channel's own record is not the "
+        "place to write something that did not happen."
     )
 
 
@@ -276,7 +316,7 @@ def _run(command: list[str]) -> tuple[int, str]:
     return done.returncode, (done.stdout + done.stderr).strip()
 
 
-def read_pane(target: str, run=_run) -> Pane:
+def read_pane(target: str, spoken: Iterable[str] = (), run=_run) -> Pane:
     """Look at a session's pane once, and answer both questions about it.
 
     Whether it may be typed into: a poke is keystrokes, and the last line of a
@@ -295,7 +335,7 @@ def read_pane(target: str, run=_run) -> Pane:
     code, out = run(["tmux", "capture-pane", "-p", "-t", target, "-S", "-12"])
     if code != 0:
         return Pane(refusal=f"cannot read pane {target}: {out or 'tmux failed'}")
-    out = theirs(out)
+    out = theirs(out, spoken)
     # Both are read, and neither shadows the other: a session can perfectly
     # well be waiting out a limit *and* holding a question, and the refusal
     # has to win while the stall is still what gets reported.
@@ -306,6 +346,7 @@ def read_pane(target: str, run=_run) -> Pane:
             else ""
         ),
         stalled=bool(STALLED.search(out)),
+        text=out,
     )
 
 
@@ -386,11 +427,18 @@ def sweep(
         # The pane answers two questions and is read once for both. Only a
         # tmux-configured channel has one; a ``nudge`` command is opaque to us
         # and its channel is judged on its inbox alone.
-        pane = read_pane(target, run=run) if target else Pane()
+        # What we might have said here, so that none of it is read back.
+        spoken = (rousing(channel.name), note(waiting, now)) if waiting else (rousing(channel.name),)
+        pane = read_pane(target, spoken, run=run) if target else Pane()
 
         # Recorded every pass, for every channel with a pane, so that a stall
         # which has cleared re-arms the edge for the next one.
-        edge = pokes.saw_stall(channel.key, pane.stalled) if target else False
+        # Two independent things have to hold before a session is called
+        # stalled: its pane has to say so, and nothing in that pane may have
+        # moved since the last look. The words alone were not enough -- they
+        # were ours, once -- and a session that is working prints something.
+        quiet = pokes.still(channel.key, pane.text) if target else False
+        edge = pokes.saw_stall(channel.key, pane.stalled and quiet) if target else False
 
         if waiting is not None:
             why = due(waiting, pokes.at.get(channel.key), now, after, every)

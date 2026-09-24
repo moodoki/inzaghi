@@ -329,11 +329,22 @@ def _boom(*args, **kwargs):
 LIMIT = "Claude usage limit reached. Your limit will reset at 3pm."
 
 
+def settle(config, pokes, run, now=NOW):
+    """One sweep to see the pane, so the next can tell it has not moved.
+
+    A stall is two things at once -- the words, and nothing happening -- and
+    the second cannot be answered by a single look. That costs one pass, and
+    it is the reason a session that is merely slow is not called stalled.
+    """
+    return sup.sweep(config, now=now, pokes=pokes, run=run)
+
+
 def test_a_stalled_session_is_roused_even_with_an_empty_inbox(supervised, tmp_path):
     """The case the watcher cannot cover: nothing has arrived and nothing will
     happen again until something asks."""
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
+    assert settle(config, pokes, Recorder(LIMIT)) == []  # the first look only
 
     (report,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
@@ -341,16 +352,38 @@ def test_a_stalled_session_is_roused_even_with_an_empty_inbox(supervised, tmp_pa
     assert pokes.at[channel.key] == NOW
 
 
-def test_rousing_says_nothing_about_what_to_do(supervised):
-    """There is nothing here we know it should be working on."""
+def test_a_pane_that_is_still_moving_is_not_stalled(supervised, tmp_path):
+    """The words are not enough: a session doing something prints something."""
+    config, _ = supervised
+    pokes = sup.Pokes(tmp_path / "p.json")
+    settle(config, pokes, Recorder(LIMIT + "\n● step 1"))
+    assert sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT + "\n● step 2")) == []
+
+
+def test_rousing_never_says_the_words_that_detect_a_stall(supervised):
+    """Or the message becomes the evidence for the next one."""
+    assert sup.STALLED.search(sup.rousing("northwind")) is None
+    assert "northwind" in sup.rousing("northwind")
+
+
+def test_rousing_asks_rather_than_tells(supervised):
+    """It must not instruct a healthy session to record an outage it never had.
+
+    Two sessions reported this: the poke said to write "you were paused and are
+    back" into the heartbeat, which for a false positive is a phantom outage in
+    the channel's permanent record -- and the record is what everything else
+    here reads.
+    """
     text = sup.rousing("northwind")
-    assert "usage limit" in text and "northwind" in text
+    assert "Check for yourself" in text
+    assert "if you were not" in text.lower() and "false positive" in text
 
 
 def test_a_stalled_session_is_not_roused_twice_in_the_interval(supervised, tmp_path):
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
     pokes.record(channel.key, NOW - 60)
+    settle(config, pokes, Recorder(LIMIT))
 
     (report,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
@@ -363,6 +396,7 @@ def test_a_stalled_session_is_roused_again_once_the_interval_passes(supervised, 
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
     pokes.record(channel.key, NOW - 1000)
+    settle(config, pokes, Recorder(LIMIT))
 
     (report,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
@@ -391,6 +425,7 @@ def test_a_stalled_pane_that_is_also_asking_something_is_still_refused(supervise
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
     pane = LIMIT + "\nDo you want to proceed?\n ❯ 1. Yes"
+    settle(config, pokes, Recorder(pane))
 
     (report,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(pane))
 
@@ -415,37 +450,35 @@ def test_a_channel_with_no_pane_is_judged_on_its_inbox_alone(channel_root, tmp_p
 # before anyone noticed -- four of which had never stalled at all.
 
 
-def test_our_own_poke_is_not_a_stall(supervised, tmp_path):
-    config, channel = supervised
-    pane = "● Running the tests\n" + sup.rousing("northwind") + "\n❯ \n"
-    assert sup.STALLED.search(pane), "the message really does contain the words"
+def test_our_own_poke_is_never_evidence(supervised, tmp_path):
+    """Whatever it says, and however the terminal wrapped it."""
+    config, _ = supervised
+    spoken = sup.rousing("northwind")
+    wrapped = "● Running the tests\n" + spoken[:58] + "\n" + spoken[58:] + "\n❯ \n"
+    pokes = sup.Pokes(tmp_path / "p.json")
+    settle(config, pokes, Recorder(wrapped))
+    assert sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(wrapped)) == []
 
-    assert sup.sweep(config, now=NOW, pokes=sup.Pokes(tmp_path / "p.json"),
-                     run=Recorder(pane)) == []
 
-
-def test_a_wrapped_poke_is_dropped_to_its_last_line():
-    """A pane wraps, so only the first line carries the signature."""
-    wrapped = (
-        "❯ \n"
-        f"{sup.SIGNATURE} northwind's session looks like it stopped at a\n"
-        "  usage limit. If the limit has reset, carry on where you left off\n"
-        "● Running the tests\n"
-    )
-    kept = sup.theirs(wrapped)
-    assert "usage limit" not in kept
-    assert "Running the tests" in kept
+def test_a_wrapped_poke_is_removed_wherever_the_break_fell(supervised):
+    spoken = sup.rousing("northwind")
+    for cut in (10, 40, 90, len(spoken) - 5):
+        wrapped = spoken[:cut] + "\n" + spoken[cut:] + "\n● the session speaking"
+        kept = sup.theirs(wrapped, [spoken])
+        assert "the session speaking" in kept
+        assert "nothing has moved" not in kept, f"survived a break at {cut}"
 
 
 def test_what_the_session_itself_said_is_kept():
-    pane = f"{sup.SIGNATURE} go\n● I hit a usage limit and I am back\n"
-    assert "usage limit" in sup.theirs(pane)
+    pane = "● I hit a usage limit and I am back\n" + sup.rousing("northwind")
+    assert "usage limit" in sup.theirs(pane, [sup.rousing("northwind")])
 
 
 def test_a_question_is_still_refused_with_our_line_in_the_pane():
-    """Filtering our own words must not filter away the thing that protects a user."""
-    pane = f"{sup.SIGNATURE} go\n\nDo you want to proceed?\n ❯ 1. Yes\n"
-    assert "not typing into it" in sup.read_pane("win:1.0", run=Recorder(pane)).refusal
+    """Filtering our own words must not filter away what protects a user."""
+    pane = sup.rousing("northwind") + "\n\nDo you want to proceed?\n ❯ 1. Yes\n"
+    refusal = sup.read_pane("win:1.0", [sup.rousing("northwind")], run=Recorder(pane)).refusal
+    assert "not typing into it" in refusal
 
 
 # -- one poke per stall, not one per interval -----------------------------
@@ -455,6 +488,7 @@ def test_a_stall_is_poked_once_and_not_again_while_it_lasts(supervised, tmp_path
     """A session coming back answers the first; a wedged one answers none."""
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
+    settle(config, pokes, Recorder(LIMIT))
 
     (first,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
     assert first.action == "poked (stall)"
@@ -466,9 +500,11 @@ def test_a_stall_is_poked_once_and_not_again_while_it_lasts(supervised, tmp_path
 def test_a_stall_that_clears_and_returns_is_poked_again(supervised, tmp_path):
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
+    settle(config, pokes, Recorder(LIMIT))
     sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
-    sup.sweep(config, now=NOW + 5_000, pokes=pokes, run=Recorder("● working\n❯ \n"))
+    sup.sweep(config, now=NOW + 4_000, pokes=pokes, run=Recorder("● working\n❯ \n"))
+    sup.sweep(config, now=NOW + 5_000, pokes=pokes, run=Recorder(LIMIT))
     (again,) = sup.sweep(config, now=NOW + 10_000, pokes=pokes, run=Recorder(LIMIT))
 
     assert again.action == "poked (stall)"
@@ -478,6 +514,7 @@ def test_the_edge_survives_a_restart(supervised, tmp_path):
     """The supervisor is meant to be restarted; a stall must not re-fire for it."""
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
+    settle(config, pokes, Recorder(LIMIT))
     sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
     reloaded = sup.Pokes.load(tmp_path / "p.json")
@@ -489,6 +526,7 @@ def test_mail_is_still_poked_while_a_stall_is_held(supervised, tmp_path):
     """The two are different questions: unread mail is not answered by silence."""
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")
+    settle(config, pokes, Recorder(LIMIT))
     sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
 
     put(channel.root, "m.md", age=6000)

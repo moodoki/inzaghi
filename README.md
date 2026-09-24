@@ -363,9 +363,20 @@ and stays there, so a pattern matched against the whole pane matches the
 supervisor's own message on the next pass — a supervisor detecting itself, once
 per interval, for as long as the scrollback holds. That is not hypothetical: it
 sent 105 stall pokes across five channels that way, four of which had never
-stalled at all. Every line it writes is now signed, and signed lines are
-stripped from the capture before anything is matched against it, wrapped
-continuations included.
+stalled at all. Four things stop it now, and the first is the one that cannot
+come loose:
+
+- the message says nothing a stall is detected by, so it cannot report itself;
+- what it did say is removed from the capture before anything is matched, found
+  character by character because a terminal wraps mid-word as readily as
+  between two;
+- the words alone are not enough — the pane must also be *unchanged* since the
+  last look, since a session that is working prints something;
+- and a stall is poked on the edge, so even a false one costs one message.
+
+The residue is a session writing prose about a limit it survived, which reads
+exactly like a session at one. That is the limit of judging a session by its
+terminal, and it is why the last two brakes are there.
 
 **It never answers a question.** A poke is keystrokes, and the last line of a
 pane decides what they mean — typing into a session that is asking its user
