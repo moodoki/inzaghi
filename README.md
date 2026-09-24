@@ -325,9 +325,12 @@ waiting: a limit kills nothing — the process, the watchers and the folder are
 all fine — it just means nothing will happen in that session again, and
 nothing tells it when the limit has reset. The poke is what restarts it. Sent
 before the reset it costs one turn that ends the way the last one did; sent
-after, the session picks up where it stopped. Both cases are held to
-`nudge_every_seconds`, so a session waiting out a three-hour limit is asked
-twelve times, not four hundred.
+after, the session picks up where it stopped. A stall is poked **once**, on the pass it appears, and not again while it
+lasts: a session that is coming back answers the first message, and one that is
+genuinely wedged will not answer the twentieth either — but twenty pokes cost
+twenty wake-ups spent reading the same sentence. The stall has to clear and
+return before another is sent. Unread mail is a separate question and is still
+poked on its own interval while a stall is held.
 
 ```toml
 [[channels]]
@@ -354,6 +357,15 @@ inbox first, since poking one that was about to look anyway is just noise.
 a session that is busy, wedged or waiting on a human does not become less so
 for being told twice, and a supervisor that repeats every pass is one you turn
 off.
+
+**Nothing it wrote is evidence.** A poke lands in the pane it was typed into
+and stays there, so a pattern matched against the whole pane matches the
+supervisor's own message on the next pass — a supervisor detecting itself, once
+per interval, for as long as the scrollback holds. That is not hypothetical: it
+sent 105 stall pokes across five channels that way, four of which had never
+stalled at all. Every line it writes is now signed, and signed lines are
+stripped from the capture before anything is matched against it, wrapped
+continuations included.
 
 **It never answers a question.** A poke is keystrokes, and the last line of a
 pane decides what they mean — typing into a session that is asking its user

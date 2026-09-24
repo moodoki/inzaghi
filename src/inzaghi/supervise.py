@@ -30,6 +30,14 @@ from pathlib import Path
 from .channel import Channel
 from .config import Config, state_dir
 
+#: How every line this sends begins, so that none of it can be read back as
+#: evidence. A poke lands in the pane it was typed into and stays there, so a
+#: pattern matched against the whole pane matches our own words on the next
+#: pass -- which is a supervisor detecting itself, once every interval, for as
+#: long as the scrollback holds. It sent 105 pokes that way before this line
+#: existed. Nothing we wrote is ever evidence of anything.
+SIGNATURE = "Inzaghi supervisor:"
+
 #: How often a resident sweep looks. Cheap: one listing per channel.
 DEFAULT_INTERVAL = 30.0
 
@@ -143,6 +151,12 @@ class Pokes:
 
     path: Path
     at: dict[str, float] = field(default_factory=dict)
+    #: Which channels looked stalled on the last pass. A stall is poked on the
+    #: edge -- the pass where it first appears -- and not again while it lasts.
+    #: A session that answered has answered the first one; one that is wedged
+    #: will not answer the twentieth either, and twenty pokes cost twenty
+    #: wake-ups doing nothing but reading the same sentence.
+    stalled: dict[str, bool] = field(default_factory=dict)
     _dirty: bool = field(default=False, repr=False)
 
     @classmethod
@@ -153,17 +167,28 @@ class Pokes:
         except (OSError, ValueError):
             return cls(path=path)
         at = {str(k): float(v) for k, v in raw.get("at", {}).items() if _number(v)}
-        return cls(path=path, at=at)
+        stalled = {str(k): bool(v) for k, v in raw.get("stalled", {}).items()}
+        return cls(path=path, at=at, stalled=stalled)
 
     def record(self, key: str, when: float) -> None:
         self.at[key] = when
         self._dirty = True
 
+    def saw_stall(self, key: str, stalled: bool) -> bool:
+        """Note what the pane looks like now; True if this is a rising edge."""
+        was = self.stalled.get(key, False)
+        if was != stalled:
+            self.stalled[key] = stalled
+            self._dirty = True
+        return stalled and not was
+
     def save(self) -> None:
         if not self._dirty:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"version": 1, "at": self.at}, indent=1, sort_keys=True)
+        payload = json.dumps(
+            {"version": 1, "at": self.at, "stalled": self.stalled}, indent=1, sort_keys=True
+        )
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(payload, encoding="utf-8")
         tmp.replace(self.path)
@@ -185,6 +210,30 @@ def due(waiting: Waiting, last: float | None, now: float, after: float, every: f
 
 
 # -- poking ---------------------------------------------------------------
+
+
+def theirs(pane: str) -> str:
+    """``pane`` with our own lines removed, which is all that may be read.
+
+    Line by line rather than by a marker, because a pane wraps: a long poke
+    arrives as several lines of which only the first carries the signature,
+    and the rest are ours too. Anything after a signature line is dropped
+    until a line appears that plainly starts something else -- a prompt, or a
+    line the session itself produced.
+    """
+    kept, ours = [], False
+    for line in pane.splitlines():
+        if SIGNATURE in line:
+            ours = True
+            continue
+        if ours:
+            # A wrapped continuation is indented or bare prose; the session's
+            # own output starts at the left margin with a marker or a prompt.
+            if line[:1] in {"", " "} or not line.strip():
+                continue
+            ours = False
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def rousing(name: str) -> str:
@@ -246,6 +295,7 @@ def read_pane(target: str, run=_run) -> Pane:
     code, out = run(["tmux", "capture-pane", "-p", "-t", target, "-S", "-12"])
     if code != 0:
         return Pane(refusal=f"cannot read pane {target}: {out or 'tmux failed'}")
+    out = theirs(out)
     # Both are read, and neither shadows the other: a session can perfectly
     # well be waiting out a limit *and* holding a question, and the refusal
     # has to win while the stall is still what gets reported.
@@ -338,13 +388,19 @@ def sweep(
         # and its channel is judged on its inbox alone.
         pane = read_pane(target, run=run) if target else Pane()
 
+        # Recorded every pass, for every channel with a pane, so that a stall
+        # which has cleared re-arms the edge for the next one.
+        edge = pokes.saw_stall(channel.key, pane.stalled) if target else False
+
         if waiting is not None:
             why = due(waiting, pokes.at.get(channel.key), now, after, every)
             reason, text = ("mail", note(waiting, now))
-        elif pane.stalled:
-            # No mail, but the session has stopped. Held to the same interval:
-            # before the limit resets the poke is a wasted turn, and after it
-            # one is enough.
+        elif edge:
+            # The pass on which the stall first appeared, and only that one.
+            # A session that is coming back answers the first poke; one that is
+            # wedged will not answer any, so repeating costs wake-ups and buys
+            # nothing. The interval still applies, so a stall arriving straight
+            # after a mail poke waits its turn.
             last = pokes.at.get(channel.key)
             why = "" if last is None or now - last >= every else (
                 f"poked {int(now - last)}s ago, under the {int(every)}s interval"

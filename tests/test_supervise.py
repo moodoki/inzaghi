@@ -404,3 +404,94 @@ def test_a_channel_with_no_pane_is_judged_on_its_inbox_alone(channel_root, tmp_p
         channels=[ChannelSpec(path=channel_root, name="northwind", nudge=("true",))]
     )
     assert sup.sweep(config, now=NOW, pokes=sup.Pokes(tmp_path / "p.json")) == []
+
+
+# -- our own words are never evidence -------------------------------------
+#
+# The defect this exists for: a poke lands in the pane it was typed into and
+# stays there, so a pattern matched against the whole pane matches our own
+# message on the next pass. The supervisor detected itself once per interval
+# for as long as the scrollback held, and sent 105 pokes across five channels
+# before anyone noticed -- four of which had never stalled at all.
+
+
+def test_our_own_poke_is_not_a_stall(supervised, tmp_path):
+    config, channel = supervised
+    pane = "● Running the tests\n" + sup.rousing("northwind") + "\n❯ \n"
+    assert sup.STALLED.search(pane), "the message really does contain the words"
+
+    assert sup.sweep(config, now=NOW, pokes=sup.Pokes(tmp_path / "p.json"),
+                     run=Recorder(pane)) == []
+
+
+def test_a_wrapped_poke_is_dropped_to_its_last_line():
+    """A pane wraps, so only the first line carries the signature."""
+    wrapped = (
+        "❯ \n"
+        f"{sup.SIGNATURE} northwind's session looks like it stopped at a\n"
+        "  usage limit. If the limit has reset, carry on where you left off\n"
+        "● Running the tests\n"
+    )
+    kept = sup.theirs(wrapped)
+    assert "usage limit" not in kept
+    assert "Running the tests" in kept
+
+
+def test_what_the_session_itself_said_is_kept():
+    pane = f"{sup.SIGNATURE} go\n● I hit a usage limit and I am back\n"
+    assert "usage limit" in sup.theirs(pane)
+
+
+def test_a_question_is_still_refused_with_our_line_in_the_pane():
+    """Filtering our own words must not filter away the thing that protects a user."""
+    pane = f"{sup.SIGNATURE} go\n\nDo you want to proceed?\n ❯ 1. Yes\n"
+    assert "not typing into it" in sup.read_pane("win:1.0", run=Recorder(pane)).refusal
+
+
+# -- one poke per stall, not one per interval -----------------------------
+
+
+def test_a_stall_is_poked_once_and_not_again_while_it_lasts(supervised, tmp_path):
+    """A session coming back answers the first; a wedged one answers none."""
+    config, channel = supervised
+    pokes = sup.Pokes(tmp_path / "p.json")
+
+    (first,) = sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
+    assert first.action == "poked (stall)"
+
+    # Long past the interval, still stalled, and still quiet.
+    assert sup.sweep(config, now=NOW + 10_000, pokes=pokes, run=Recorder(LIMIT)) == []
+
+
+def test_a_stall_that_clears_and_returns_is_poked_again(supervised, tmp_path):
+    config, channel = supervised
+    pokes = sup.Pokes(tmp_path / "p.json")
+    sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
+
+    sup.sweep(config, now=NOW + 5_000, pokes=pokes, run=Recorder("● working\n❯ \n"))
+    (again,) = sup.sweep(config, now=NOW + 10_000, pokes=pokes, run=Recorder(LIMIT))
+
+    assert again.action == "poked (stall)"
+
+
+def test_the_edge_survives_a_restart(supervised, tmp_path):
+    """The supervisor is meant to be restarted; a stall must not re-fire for it."""
+    config, channel = supervised
+    pokes = sup.Pokes(tmp_path / "p.json")
+    sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
+
+    reloaded = sup.Pokes.load(tmp_path / "p.json")
+    assert reloaded.stalled[channel.key] is True
+    assert sup.sweep(config, now=NOW + 10_000, pokes=reloaded, run=Recorder(LIMIT)) == []
+
+
+def test_mail_is_still_poked_while_a_stall_is_held(supervised, tmp_path):
+    """The two are different questions: unread mail is not answered by silence."""
+    config, channel = supervised
+    pokes = sup.Pokes(tmp_path / "p.json")
+    sup.sweep(config, now=NOW, pokes=pokes, run=Recorder(LIMIT))
+
+    put(channel.root, "m.md", age=6000)
+    (report,) = sup.sweep(config, now=NOW + 10_000, pokes=pokes, run=Recorder(LIMIT))
+
+    assert report.action == "poked (mail)"
