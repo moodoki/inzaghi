@@ -54,7 +54,7 @@ Inside a clone, `uv run inz` does everything without installing anything.
 
 ## Which copy is running
 
-The bottom-left corner of the footer says, beside the key hints:
+The bottom-right corner of the footer says, past the key hints:
 
 ```
 0.1.0 · main 1a2b3c4*
