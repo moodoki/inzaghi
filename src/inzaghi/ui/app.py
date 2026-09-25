@@ -193,13 +193,13 @@ class InzaghiApp(App):
                 pane_id = self._new_pane_id(channel)
                 with TabPane(channel.name, id=pane_id):
                     yield ChannelPane(channel)
-        # The footer row, with the build in the corner beside the keys. There
-        # are no releases yet, so what identifies a running copy is the commit
+        # The footer row: the keys, and the build in the far corner. There are
+        # no releases yet, so what identifies a running copy is the commit
         # under it -- see ``inzaghi.version``. It is asked once: a commit made
         # while the app is up is not the commit the app is running.
         with Horizontal(id="statusbar"):
-            yield Static(version.line(), id="build", markup=False)
             yield Footer()
+            yield Static(version.line(), id="build", markup=False)
 
     def on_mount(self) -> None:
         # Before anything is scheduled: from here on, a Textual thread worker

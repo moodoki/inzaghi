@@ -1396,7 +1396,7 @@ async def test_the_tick_redraws_the_pane_in_front_only(channel_root, tmp_path):
 # -- which copy is running -------------------------------------------------
 
 
-async def test_the_build_sits_in_the_bottom_left_corner(channel_root):
+async def test_the_build_sits_in_the_bottom_right_corner(channel_root):
     """Asked for by the corner it occupies, so the test checks the corner."""
     app = make_app(channel_root)
     async with app.run_test() as pilot:
@@ -1404,7 +1404,7 @@ async def test_the_build_sits_in_the_bottom_left_corner(channel_root):
         build = app.screen.query_one("#build", Static)
         region = build.region
 
-        assert region.x == 0, "not against the left edge"
+        assert region.right == app.screen.size.width, "not against the right edge"
         assert region.y == app.screen.size.height - 1, "not on the bottom row"
         assert build.visual.plain.strip() == version.line()
 
@@ -1420,7 +1420,7 @@ async def test_the_keys_still_have_the_rest_of_the_row(channel_root):
         build = app.screen.query_one("#build", Static)
 
         assert footer.region.y == build.region.y
-        assert footer.region.x >= build.region.right
+        assert footer.region.right <= build.region.x, "the keys run under the build"
         assert footer.region.width > build.region.width
 
 

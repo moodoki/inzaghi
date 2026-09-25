@@ -8,7 +8,7 @@ Screen {
 
 /* -- the footer row ----------------------------------------------------- */
 
-/* The build sits in the bottom-left corner and the keys take the rest. It is
+/* The keys take the row and the build sits in the bottom-right corner. It is
    dim on purpose: it answers "which copy is this" when something is wrong,
    and the rest of the time it should be furniture. */
 #statusbar {
