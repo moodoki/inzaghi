@@ -138,6 +138,20 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   from outside the channel: the config no longer watching it, or an absence
   `absence_is_real` will vouch for. Never per file -- a notification missing
   from one scan of a synced folder is late at least as often as it is gone.
+- `supervise` is the only part of this that reaches *out* of a channel, and it
+  writes nothing into one -- what it poked and when goes in the state directory
+  beside those receipts, because a supervisor writing into the folder it
+  watches would be one more thing racing the session. It is deliberately dumb:
+  it lists inboxes, pokes whoever owns one that has gone unread or has stopped
+  at a usage limit, records that it poked, and reads nothing. It exists because
+  every watcher a session can build is started by that session, so none of them
+  recovers a turn that ended with nothing armed -- three channels lost mail that
+  way in one night, three different ways. The rule that governs it is that a
+  poke is keystrokes: `read_pane` looks before anything is typed and refuses a
+  pane that might be asking its user something, because the Enter behind our
+  text would answer it and that decision is never ours. Refusal and stall are
+  read independently so a limit notice cannot license one. A refusal is never
+  recorded as a poke, so the next pass retries once a human has answered.
 - `check_action` returning `False` hides a binding; `None` only dims it. It is
   also consulted on every dispatch, before the action runs, which is what
   makes the two-key sequences work: `ctrl+w` and `g` arm a prefix, and the
