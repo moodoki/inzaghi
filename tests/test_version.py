@@ -143,3 +143,55 @@ def test_a_long_branch_is_cut_and_the_hash_survives(tree):
 def test_a_branch_at_the_limit_is_left_whole(tree):
     name = "x" * version.BRANCH_LENGTH
     assert f"{name} 1a2b3c4" in described(tree, branch=name)
+
+
+# -- on the command line ---------------------------------------------------
+
+
+def test_the_cli_prints_the_same_line_the_corner_shows(capsys, monkeypatch):
+    """One answer to "which copy is this", however it is asked."""
+    from inzaghi import cli
+
+    version.line.cache_clear()
+    monkeypatch.setattr(version, "describe", lambda: "0.1.0 · main 1a2b3c4*")
+    with pytest.raises(SystemExit) as exit:
+        cli.main(["--version"])
+
+    assert exit.value.code == 0
+    assert capsys.readouterr().out.strip() == "0.1.0 · main 1a2b3c4*"
+    version.line.cache_clear()
+
+
+def test_the_version_needs_no_config(capsys, monkeypatch, tmp_path):
+    """It is what you type when something is wrong, which includes the config."""
+    from inzaghi import cli
+
+    monkeypatch.setenv("INZAGHI_CONFIG", str(tmp_path / "nothing" / "here.toml"))
+    monkeypatch.setattr(cli.Config, "load", _refuse)
+    with pytest.raises(SystemExit) as exit:
+        cli.main(["--version"])
+
+    assert exit.value.code == 0
+    assert capsys.readouterr().out.strip()
+
+
+def _refuse(*args, **kwargs):
+    raise AssertionError("--version must not need the config read")
+
+
+def test_building_the_parser_does_not_shell_out(monkeypatch):
+    """Every subcommand builds it, and this one shells out to git.
+
+    ``action="version"`` would take the string here, on every invocation of
+    every command, which is why it is not used.
+    """
+    from inzaghi import cli
+
+    version.line.cache_clear()
+    monkeypatch.setattr(version, "describe", _refuse_git)
+    cli._parser()  # must not raise
+    version.line.cache_clear()
+
+
+def _refuse_git():
+    raise AssertionError("the parser asked git for the version")
