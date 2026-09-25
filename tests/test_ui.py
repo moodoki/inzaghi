@@ -15,6 +15,7 @@ from textual.widgets import DataTable, Input, OptionList, Static, TabbedContent,
 from conftest import write
 
 from inzaghi import channel as channel_module
+from inzaghi import version
 from inzaghi import compose as composer_module
 from inzaghi.config import ChannelSpec, Config, RootSpec
 from inzaghi.protocol import init_channel
@@ -1390,3 +1391,50 @@ async def test_the_tick_redraws_the_pane_in_front_only(channel_root, tmp_path):
         strips.clear()
         app._tick()
         assert strips == [channel_root.name], f"redrew panes that are not on screen: {strips}"
+
+
+# -- which copy is running -------------------------------------------------
+
+
+async def test_the_build_sits_in_the_bottom_left_corner(channel_root):
+    """Asked for by the corner it occupies, so the test checks the corner."""
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        build = app.screen.query_one("#build", Static)
+        region = build.region
+
+        assert region.x == 0, "not against the left edge"
+        assert region.y == app.screen.size.height - 1, "not on the bottom row"
+        assert build.visual.plain.strip() == version.line()
+
+
+async def test_the_keys_still_have_the_rest_of_the_row(channel_root):
+    """The build shares the footer row; it must not have taken it over."""
+    from textual.widgets import Footer
+
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        footer = app.screen.query_one(Footer)
+        build = app.screen.query_one("#build", Static)
+
+        assert footer.region.y == build.region.y
+        assert footer.region.x >= build.region.right
+        assert footer.region.width > build.region.width
+
+
+async def test_the_build_is_asked_for_once_not_per_frame(channel_root, monkeypatch):
+    """It shells out to git; a screen redraw must not."""
+    version.line.cache_clear()
+    calls = []
+    monkeypatch.setattr(version, "describe", lambda: calls.append(1) or "0.0.0 · test")
+
+    app = make_app(channel_root)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.refresh()
+        await pilot.pause()
+
+    assert len(calls) == 1
+    version.line.cache_clear()

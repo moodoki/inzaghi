@@ -52,6 +52,32 @@ same checkout, and `inz skill sync` keeps them in step.
 
 Inside a clone, `uv run inz` does everything without installing anything.
 
+## Which copy is running
+
+The bottom-left corner of the footer says, beside the key hints:
+
+```
+0.1.0 · main 1a2b3c4*
+```
+
+There are no releases yet, so the package number is the same for every
+checkout between two of them and says almost nothing on its own. What
+distinguishes one running copy from another is the commit under it, which an
+editable install can read: `uv tool install --editable` leaves the entry point
+pointing at a working tree, and a working tree has a `.git` above it. That
+absence is the whole test — an installed wheel has no tree, so it shows its
+version and nothing else, which is the honest answer there.
+
+The same line is what `inz --version` prints, which is the one to reach for
+when the corner is not in front of you — reporting a bug, or checking what a
+cron line is actually running.
+
+The `*` means the tree has been edited since that commit, `git status`
+included untracked files in the answer, and a detached head shows the hash
+alone. A branch name longer than the corner is cut before the hash is, since
+the hash is the part that identifies the build. It is read once at startup:
+a commit made while the app is up is not the commit the app is running.
+
 ## Where things live
 
 ```

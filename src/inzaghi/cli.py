@@ -13,7 +13,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import compose, fmt
+from . import compose, fmt, version
 from .channel import Channel
 from .compose import QUICK_ACTIONS, QUICK_BY_KEYWORD, ReadOnlyChannel
 from .config import Config
@@ -31,6 +31,22 @@ def main(argv: list[str] | None = None) -> int:
     return args.handler(args, config)
 
 
+class _Version(argparse.Action):
+    """``--version``, asked only when asked for.
+
+    Not ``action="version"``: that takes the string when the parser is built,
+    which is every invocation of every subcommand, and building this one
+    shells out to git. Here it is computed in the branch that prints it.
+    """
+
+    def __init__(self, option_strings, dest, **kwargs) -> None:
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None) -> None:
+        print(version.line())
+        parser.exit()
+
+
 def _prog() -> str:
     """Whichever name the user typed -- ``inzaghi`` or the ``inz`` alias.
 
@@ -43,6 +59,9 @@ def _prog() -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=_prog(), description=__doc__.splitlines()[0])
     parser.add_argument("--config", help="path to config.toml (default: ~/.config/inzaghi/config.toml)")
+    parser.add_argument(
+        "--version", action=_Version, help="print which copy this is and exit"
+    )
     parser.set_defaults(handler=_cmd_ui)
     sub = parser.add_subparsers()
 
