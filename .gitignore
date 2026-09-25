@@ -6,3 +6,7 @@ dist/
 .DS_Store
 CLAUDE.local.md
 artifacts/
+
+# Local credentials. Never committed; `git add -A` would otherwise take it.
+.env
+.env.*
