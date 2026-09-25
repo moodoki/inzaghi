@@ -6,6 +6,33 @@ Screen {
     background: $surface;
 }
 
+/* -- the footer row ----------------------------------------------------- */
+
+/* The build sits in the bottom-left corner and the keys take the rest. It is
+   dim on purpose: it answers "which copy is this" when something is wrong,
+   and the rest of the time it should be furniture. */
+#statusbar {
+    dock: bottom;
+    height: 1;
+}
+
+#build {
+    width: auto;
+    padding: 0 1;
+    color: $text-muted;
+    background: $panel;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* The Footer docks itself to the bottom of the screen by its own default
+   stylesheet, which takes it out of this row and puts it over the build.
+   Undocked, it is an ordinary child and takes the width the build leaves. */
+#statusbar Footer {
+    dock: none;
+    width: 1fr;
+}
+
 TabbedContent {
     height: 1fr;
 }

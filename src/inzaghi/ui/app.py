@@ -21,11 +21,13 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.timer import Timer
-from textual.widgets import Footer, Header, TabbedContent, TabPane
+from textual.containers import Horizontal
+from textual.widgets import Footer, Header, Static, TabbedContent, TabPane
 
 from .. import attach
 from .. import compose as composer
 from .. import fmt
+from .. import version
 from ..channel import Channel, absence_is_real, remove_conflicts
 from ..compose import QUICK_ACTIONS, QUICK_BY_KEYWORD, QuickAction, ReadOnlyChannel
 from ..config import Config
@@ -191,7 +193,13 @@ class InzaghiApp(App):
                 pane_id = self._new_pane_id(channel)
                 with TabPane(channel.name, id=pane_id):
                     yield ChannelPane(channel)
-        yield Footer()
+        # The footer row, with the build in the corner beside the keys. There
+        # are no releases yet, so what identifies a running copy is the commit
+        # under it -- see ``inzaghi.version``. It is asked once: a commit made
+        # while the app is up is not the commit the app is running.
+        with Horizontal(id="statusbar"):
+            yield Static(version.line(), id="build", markup=False)
+            yield Footer()
 
     def on_mount(self) -> None:
         # Before anything is scheduled: from here on, a Textual thread worker
