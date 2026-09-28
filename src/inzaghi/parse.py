@@ -225,7 +225,7 @@ def markdown_links(text: str) -> list[Link]:
     The target is returned undecoded and unresolved: whether it names anything,
     and whether that thing is allowed, are not questions about prose.
     """
-    stripped = _SPAN_RE.sub(" ", _FENCE_RE.sub("\n", text))
+    stripped = without_code(text)
     found: list[Link] = []
     for match in _LINK_RE.finditer(stripped):
         target = (match["bracketed"] or match["bare"] or "").strip()
@@ -234,6 +234,16 @@ def markdown_links(text: str) -> list[Link]:
                 Link(label=match["label"].strip(), target=target, image=bool(match["image"]))
             )
     return found
+
+
+def without_code(text: str) -> str:
+    """``text`` with fenced blocks and inline spans blanked out.
+
+    What is inside a fence is being shown, not said. A path there is one
+    someone is quoting -- a command to run, a filename to look for -- and
+    reading it as a reference would answer a question nobody asked.
+    """
+    return _SPAN_RE.sub(" ", _FENCE_RE.sub("\n", text))
 
 
 def parse_kv_bullets(text: str) -> dict[str, str]:

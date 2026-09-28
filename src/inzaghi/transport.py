@@ -38,8 +38,9 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import parse
+from . import attach, parse
 from .channel import Channel, ReadOnlyChannel
+from .compose import ATTACHMENTS
 from .config import state_dir
 
 #: Non-interactive on purpose: this runs from cron, where a passphrase prompt
@@ -159,12 +160,17 @@ def retire(channel: Channel) -> list[str]:
     Like ``channel.remove_conflicts``, every path is re-checked at the moment
     of unlinking rather than trusted from the listing: the folder is being
     written by someone else, and a listing is already a little old.
+
+    A message that carried files takes them with it. They were copies made for
+    this message, and the session has the copies it fetched; what is left here
+    is the local half of something already delivered.
     """
     twins: dict[str, Path] = {}
     for entry in _plain_files(channel.done_dir):
         twins.setdefault(parse.strip_stamp(entry.name), entry)
 
     retired: list[str] = []
+    carried: set[str] = set()
     for path in _plain_files(channel.inbox_dir):
         twin = twins.get(path.name)
         if twin is None:
@@ -173,12 +179,52 @@ def retire(channel: Channel) -> list[str]:
             continue
         if path.parent != channel.inbox_dir:  # pragma: no cover -- belt and braces
             continue
+        named = _payloads(path)  # read while it is still there to read
         try:
             path.unlink()
         except OSError:
             continue
         retired.append(path.name)
+        carried |= named
+    _retire_payloads(channel, carried)
     return sorted(retired)
+
+
+def _payloads(message: Path) -> set[str]:
+    """The names inside ``attachments/`` that one inbox message points at."""
+    try:
+        text = message.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    names = {attach.link_name(link.target) for link in parse.markdown_links(text)}
+    # A name with a directory in it is a reference this side never wrote, and
+    # this ends in ``unlink``: an exact name in the folder, or nothing.
+    return {name for name in names if name and "/" not in name}
+
+
+def _retire_payloads(channel: Channel, names: set[str]) -> None:
+    """Delete copies nothing in ``inbox/`` points at any more.
+
+    Held to the same standard as every other delete here: an exact name, in
+    exactly that folder, re-checked at the moment of unlinking. A payload two
+    messages named outlives the first of them.
+    """
+    if not names:
+        return
+    folder = channel.inbox_dir / ATTACHMENTS
+    still_wanted: set[str] = set()
+    for message in _plain_files(channel.inbox_dir):
+        still_wanted |= _payloads(message)
+    for name in names - still_wanted:
+        path = folder / name
+        if path.parent != folder:  # pragma: no cover -- belt and braces
+            continue
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
 
 
 def _plain_files(directory: Path) -> list[Path]:

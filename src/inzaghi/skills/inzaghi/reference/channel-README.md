@@ -135,6 +135,37 @@ Keywords recognised on sight: `PAUSE` (finish the current step, start no new
 jobs), `RESUME`, `STOP` (finish the current step, write a summary, end the
 loop), `STATUS` (write a fresh `STATUS.md` now). Anything else is free-form.
 
+## inbox/attachments/ (watcher → session)
+
+A message can carry files — a log excerpt too long to paste, a config to
+apply, a screenshot of what went wrong. They live here, and the message that
+needs them points at them exactly the way a notification points at its own:
+
+```
+Apply this and restart the sweep: [the new sampler config](attachments/sampler.toml).
+```
+
+The watcher copies the file into the folder and rewrites the link before the
+message is written, so what reaches you is always a name inside
+`attachments/`, never a path on somebody else's machine.
+
+* **A file nobody points at is not a delivery.** Same rule as the outbound
+  folder, for the same reason: it is how a payload still crossing the sync is
+  told apart from one that has arrived.
+* **The payload is written before the message**, and you will still sometimes
+  see them in the other order — that is what a synced folder does. So if a
+  message names a file that is not there, **wait briefly**: finish reading the
+  inbox, look again a few minutes later, and if it still has not come, act on
+  the message anyway and say in the `ack` that the file never arrived. Do not
+  wait on it in a loop. A session stopped by a file that is never going to
+  sync is a session that has stopped, which is the failure this whole protocol
+  exists to make visible.
+* **Leave the files alone.** Copy what you need out of the folder; do not edit
+  or delete what is in it. They are retired from this end when the message
+  that named them reaches `done/`.
+* Names are refused on the same terms as the outbound folder: no path that
+  climbs out, nothing absolute, no symlinks.
+
 ## Optional front matter
 
 Any file may open with a flat YAML block, which takes precedence over what the

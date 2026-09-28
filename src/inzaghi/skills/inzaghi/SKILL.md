@@ -40,6 +40,7 @@ above:
     2026-09-08_1930_milestone_<slug>.md          the append-only log
     attachments/                                 files a notification delivers
   inbox/                             messages to you; done/ once picked up
+    attachments/                     files a message delivers to you
 ```
 
 A status or heartbeat written anywhere else is not read at all. The watcher
@@ -199,6 +200,30 @@ reason to stop everything.
 
 Do not guess at a decision that changes what the run means, and do not silently
 narrow the work to avoid asking.
+
+## Files sent to you
+
+A message can carry files, the same way your notifications carry them, and it
+points at them the same way:
+
+```markdown
+Apply this and restart the sweep:
+[the new sampler config](attachments/sampler.toml).
+```
+
+They are in `inbox/attachments/`, always as a plain name inside that folder —
+the watcher copies the file in and rewrites the link before the message is
+written, so you never receive a path from somebody else's machine.
+
+**If a named file is not there, wait briefly.** Finish reading the inbox, then
+look again a few minutes later. If it still has not arrived, act on the message
+anyway and say in the `ack` that the file never came. Do not wait on it in a
+loop: a session stopped by a file that is never going to sync is a session that
+has stopped, which is exactly what this protocol exists to make visible.
+
+Copy out what you need; do not edit or delete anything in that folder. The
+files are cleaned up from the other end once the message naming them reaches
+`inbox/done/`.
 
 ## Instruction keywords
 

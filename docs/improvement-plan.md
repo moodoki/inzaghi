@@ -360,10 +360,11 @@ what it must do when a named file is missing. And `transport.retire` deletes a
 local message once it appears in `done/`; nothing currently retires the payload
 it named.
 
-*Decisions this needs:* whether the contract tells a session to *wait* for a
-named file or to act and note the absence; whether outbound copying takes a size
-ceiling and what it is (a screenshot is the point, a 4 GB core dump on a sync
-volume is not); and whether a payload is retired with its message or left.
+*Decided:* a session waits briefly — finish the inbox, look again a few minutes
+later — and then acts and notes the absence in the `ack`, never in a loop. The
+ceiling is 25 MB, in the region of the whole inbound corpus across four
+channels. A payload is retired with its message, unless a message still in
+`inbox/` names it.
 
 ---
 

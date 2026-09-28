@@ -28,6 +28,12 @@ DEFAULT_HEARTBEAT_GRACE = 60.0
 #: cadence guessed too tight would report one every time a laptop slept.
 DEFAULT_SYNC_INTERVAL = 300.0
 
+#: How long a message may sit in an inbox before ``inz supervise`` decides
+#: nothing in the session is going to notice it, and how long it leaves
+#: between pokes at the same channel. See ``supervise`` for the reasoning.
+DEFAULT_NUDGE_AFTER = 180.0
+DEFAULT_NUDGE_EVERY = 900.0
+
 
 def config_path() -> Path:
     if override := os.environ.get("INZAGHI_CONFIG"):
@@ -88,6 +94,14 @@ class ChannelSpec:
     #: ``user@host:/path/to/channel`` for ``inz sync``. Empty when the folder
     #: is kept in step by something else, which is most of the time.
     remote: str = ""
+    #: The tmux pane the session owning this channel is running in, for
+    #: ``inz supervise`` to poke when its inbox goes unread. Anything
+    #: ``tmux send-keys -t`` accepts.
+    tmux: str = ""
+    #: Or a command to run instead, as argv -- no shell. ``{name}``,
+    #: ``{path}``, ``{count}`` and ``{message}`` are substituted. For a
+    #: session that is not in tmux, or a harness with a way in of its own.
+    nudge: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -97,6 +111,10 @@ class Config:
     poll_seconds: float = DEFAULT_POLL_SECONDS
     discover_seconds: float = DEFAULT_DISCOVER_SECONDS
     heartbeat_grace_seconds: float = DEFAULT_HEARTBEAT_GRACE
+    #: How long a message may sit unread before ``inz supervise`` pokes the
+    #: session, and how long before it pokes the same one again.
+    nudge_after_seconds: float = DEFAULT_NUDGE_AFTER
+    nudge_every_seconds: float = DEFAULT_NUDGE_EVERY
     alerts: Alerts = field(default_factory=Alerts)
     #: Where this config came from, or None for one built in memory.
     source: Path | None = None
@@ -136,6 +154,8 @@ class Config:
                         entry.get("sync_interval_seconds", DEFAULT_SYNC_INTERVAL)
                     ),
                     remote=str(entry.get("remote", "")),
+                    tmux=str(entry.get("tmux", "")),
+                    nudge=tuple(str(part) for part in entry.get("nudge", ())),
                 )
                 for entry in raw.get("channels", [])
                 if entry.get("path")
@@ -145,6 +165,8 @@ class Config:
             heartbeat_grace_seconds=float(
                 raw.get("heartbeat_grace_seconds", DEFAULT_HEARTBEAT_GRACE)
             ),
+            nudge_after_seconds=float(raw.get("nudge_after_seconds", DEFAULT_NUDGE_AFTER)),
+            nudge_every_seconds=float(raw.get("nudge_every_seconds", DEFAULT_NUDGE_EVERY)),
             alerts=Alerts(
                 **{
                     key: bool(value)
