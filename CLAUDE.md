@@ -39,7 +39,8 @@ belong in `CLAUDE.local.md`, which is not committed.
                              preview.py the reader's bottom pane for a
                              delivered text file, vim.py what a motion means
                              to the focused pane, find.py the in-document
-                             search, mounting.py guards the timed refreshes,
+                             search, links.py what a link may do,
+                             mounting.py guards the timed refreshes,
                              volume.py the threads I/O runs on)
 
 Installed as two console scripts, `inzaghi` and the `inz` alias, both pointing
@@ -213,7 +214,11 @@ at `cli:main`; `cli._prog()` reports whichever name was typed.
   browser, or `xdg-open` -- and it does that before the click bubbles this
   far, so the whitelist above never gets asked. A test posts `LinkClicked` at
   the widget, not at the pane, because posting it at the pane skips the
-  handler that used to be wrong.
+  handler that used to be wrong. What the pane's handler opens is a delivered
+  file, or an `http`/`https` address (`ui/links.is_web`); every other href is
+  offered for copying on `y` and never launched. A link's label can lie about
+  its target, so the address is shown on hover -- read back off the
+  `@click` meta Textual draws the link with -- and named in the toast.
 - Two searches share `/`, and which one runs is decided by focus alone:
   `ChannelPane._reading()` names the two panes that hold a document, and
   everywhere else `/` is the channel filter it always was. They keep separate

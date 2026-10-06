@@ -184,6 +184,17 @@ widgets are built with `open_links=False`, or clicking one would hand its href
 to the browser before any of this had a say. Opening is reading, so a
 `read_only` channel allows it.
 
+Links to anywhere else follow the same narrow rule. Clicking an `http` or
+`https` link opens it in the browser, and a toast names the host, because a
+link's text need not say where it goes; hovering over any link shows its
+address. Nothing else is launched — not `file:`, not a scheme some
+application registered, not a path that is not a delivered file. Those are
+copied instead: `y` lists every link in the document you are reading, and
+`enter` copies the one under the cursor (by OSC 52, so it reaches your own
+clipboard over ssh, in terminals that allow it). The browser a click opens is
+the one on the machine running Inzaghi, so over ssh, `y` is the way to take a
+web link home too.
+
 Conflict copies inside `attachments/` are left alone: cleanup deletes text
 files it can recognise, and nothing points at a conflicted duplicate anyway.
 

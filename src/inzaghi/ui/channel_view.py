@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from textual import events
 from textual.app import ComposeResult
 from textual.content import Content, Span
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -12,9 +13,10 @@ from textual.binding import Binding
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Input, Markdown, OptionList, Static
+from textual.widgets.markdown import MarkdownBlock
 from textual.widgets.option_list import Option, OptionDoesNotExist
 
-from . import find
+from . import find, links
 from .. import attach, fmt, parse
 from ..channel import CACHE_SECONDS, Channel
 from ..model import Attachment, Snapshot
@@ -151,6 +153,8 @@ class ChannelPane(Vertical):
         Binding("F", "cycle_kind(-1)", "Filter back", show=False),
         Binding("escape", "clear_filter", "Clear filter", show=False),
         Binding("v", "attachments", "Files"),
+        # Yank, as in vim. Every link in the document on screen, to copy.
+        Binding("y", "links", "Links"),
         # Vim's search keys. They work from anywhere in the pane, so a query
         # typed in the reader can still be stepped through after the keyboard
         # has moved on -- which is what hlsearch does.
@@ -210,6 +214,8 @@ class ChannelPane(Vertical):
         #: A rebuild the search box has asked for and not yet had. Typing
         #: ``shard`` asks five times for a list nobody sees four of.
         self._filtering: Timer | None = None
+        #: The last text ``_has_links`` answered for, and its answer.
+        self._links_for: tuple[str, bool] | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("", id="strip", markup=True)
@@ -512,19 +518,75 @@ class ChannelPane(Vertical):
         self._open(self._attachment_at(event.option_index))
 
     def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
-        """A reference in the prose opens the same file the strip would.
+        """A click on a link: the file it names, or the web page it names.
 
-        Where the session wrote the link is where someone's eye lands, so it
-        has to work from there too. Anything else the document links to is
-        left alone -- this is a channel reader, not a browser, and the widget
-        is built with ``open_links=False`` so that nothing else can decide
-        otherwise.
+        A reference to a delivered file opens the same file the strip would,
+        because where the session wrote the link is where someone's eye lands.
+        A web address opens in the browser -- a click is somebody choosing to
+        go there -- and the toast names the host, because the label they
+        clicked need not. Anything else is never launched: the widget is built
+        with ``open_links=False`` so that nothing but this decides, and what
+        it offers instead is the copy list on ``y``.
         """
         event.stop()
-        if event.markdown.id != "doc":
-            return  # a link inside a delivered file is the session's text, not ours
-        name = attach.link_name(event.href)
-        self._open(next((a for a in self._attachments if a.name == name), None))
+        href = event.href.strip()
+        if event.markdown.id == "doc":
+            name = attach.link_name(href)
+            attachment = next((a for a in self._attachments if a.name == name), None)
+            if attachment is not None:
+                self._open(attachment)
+                return
+        if links.is_web(href):
+            self.notify(f"Opening {links.host(href)}")
+            self.app.open_url(href)
+            return
+        self.notify(f"Not opened: {href}. Press y to copy it.", severity="warning")
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        """Show where a link goes while the mouse is over it.
+
+        As a tooltip on the block under the pointer, which Textual already
+        places and times. A link's label can say anything, so this is the
+        only place its address is visible before it is clicked.
+        """
+        widget = event.widget
+        if widget is None or not isinstance(widget, MarkdownBlock):
+            return
+        href = links.href_at(event.style)
+        if widget.tooltip != href:
+            widget.tooltip = href
+
+    def action_links(self) -> None:
+        """``y``: the links in the document on screen, to copy one."""
+        found = links.document_links(self._link_source())
+        if not found:
+            return
+
+        def copied(href: str | None) -> None:
+            if href:
+                self.app.copy_to_clipboard(href)
+                self.notify(f"Copied {href}")
+
+        self.app.push_screen(links.LinkScreen(found), copied)
+
+    def _has_links(self) -> bool:
+        """Whether ``y`` has anything to offer, kept per text.
+
+        Asked on every key and every footer refresh, so the answer is held
+        against the text it was computed from and compared by identity.
+        """
+        text = self._link_source()
+        if self._links_for is None or self._links_for[0] is not text:
+            self._links_for = (text, bool(links.document_links(text)))
+        return self._links_for[1]
+
+    def _link_source(self) -> str:
+        """The text of the document the keyboard is in, the entry if neither."""
+        if self._reading() == "file":
+            searchable = self.preview.searchable()
+            if searchable is not None and searchable[0] == "markdown":
+                return searchable[2]
+        return self._showing[1].body if self._showing else ""
 
     def _open(self, attachment: Attachment | None) -> None:
         """Hand one delivery up to the app, or say why it cannot be shown."""
@@ -769,6 +831,8 @@ class ChannelPane(Vertical):
         """
         if action == "attachments":
             return bool(self._attachments)
+        if action == "links":
+            return self._has_links()
         return True
 
     # -- filtering --------------------------------------------------------
