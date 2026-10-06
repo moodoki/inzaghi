@@ -587,8 +587,8 @@ async def test_clicking_the_reference_in_the_prose_opens_the_same_file(delivered
         launcher.assert_called_once()
 
 
-async def test_a_link_to_anywhere_else_in_the_prose_launches_nothing(delivered):
-    """This is a channel reader, not a browser."""
+async def test_a_link_to_anywhere_else_in_the_prose_launches_no_viewer(delivered):
+    """A web address goes to the browser, never to the attachment launcher."""
     app = make_app(delivered)
     async with app.run_test() as pilot:
         pane = await open_pane(app, pilot)
@@ -605,7 +605,8 @@ async def test_the_markdown_widget_never_opens_a_href_itself(delivered):
     """Textual's Markdown hands a clicked href to ``app.open_url`` -- the web
     browser, or xdg-open -- unless it is built with ``open_links=False``. That
     would put every decision here in the hands of whatever an unattended
-    session wrote, and it runs before this pane hears about the click."""
+    session wrote, and it runs before this pane hears about the click. Only
+    the pane's own handler may open anything, and only a web address."""
     app = make_app(delivered)
     async with app.run_test() as pilot:
         pane = await open_pane(app, pilot)
@@ -613,12 +614,63 @@ async def test_the_markdown_widget_never_opens_a_href_itself(delivered):
         await pilot.pause()
         with mock.patch.object(type(app), "open_url") as opener:
             with mock.patch("inzaghi.ui.app.attach.launch", return_value=["open", "x"]):
-                click(pane, "https://example.com/report.pdf")
                 click(pane, "file:///etc/passwd")
                 click(pane, "attachments/regression-report.pdf")
+                click(pane, "vscode://open?file=/etc/passwd")
+                click(pane, "javascript:alert(1)")
                 await settle(app, pilot)
         opener.assert_not_called()
-        assert pane.query_one("#doc", Markdown)._open_links is False
+
+
+async def test_clicking_a_web_address_opens_it_and_names_the_host(delivered):
+    """A label need not say where it goes, so the toast does."""
+    app = make_app(delivered)
+    async with app.run_test() as pilot:
+        pane = await open_pane(app, pilot)
+        select(app, str(delivered / "notifications" / "2026-09-05_0530_milestone_sweep-closed.md"))
+        await pilot.pause()
+        with mock.patch.object(type(app), "open_url") as opener:
+            with mock.patch.object(type(pane), "notify") as told:
+                click(pane, "https://example.com/report")
+                await settle(app, pilot)
+        opener.assert_called_once_with("https://example.com/report")
+        assert "example.com" in told.call_args.args[0]
+
+
+async def test_a_web_address_in_a_delivered_file_opens_too(read_here):
+    """The same click means the same thing in either pane."""
+    app = make_app(read_here)
+    async with app.run_test() as pilot:
+        pane = await open_file(app, pilot)
+        with mock.patch.object(type(app), "open_url") as opener:
+            click(pane, "http://example.com/", selector="#preview-md")
+            await settle(app, pilot)
+        opener.assert_called_once_with("http://example.com/")
+
+
+async def test_y_copies_a_link_from_the_keyboard(delivered):
+    """Anything that is not a web address is copied rather than launched."""
+    app = make_app(delivered)
+    async with app.run_test() as pilot:
+        pane = await open_pane(app, pilot)
+        select(app, str(delivered / "notifications" / "2026-09-05_0530_milestone_sweep-closed.md"))
+        await pilot.pause()
+        assert pane.check_action("links", ()) is True
+        with mock.patch.object(type(app), "copy_to_clipboard") as copier:
+            await pilot.press("y")
+            await pilot.pause()
+            await pilot.press("j", "enter")
+            await pilot.pause()
+        copier.assert_called_once_with("attachments/bench.tar.gz")
+
+
+async def test_the_copy_key_hides_on_a_document_without_links(delivered):
+    app = make_app(delivered)
+    async with app.run_test() as pilot:
+        pane = await open_pane(app, pilot)
+        select(app, "pin:STATUS.md")
+        await pilot.pause()
+        assert pane.check_action("links", ()) is False
 
 
 async def test_the_timeline_marks_the_entry_that_carried_files(delivered):
@@ -1110,3 +1162,20 @@ def test_the_cheap_path_still_refuses_what_it_always_did(channel_root, tmp_path)
     assert found["adir"].problem == "refused: not a file"
     assert found["../../etc/passwd"].problem == "refused: outside the channel"
     assert (found["gone.md"].arrival, found["gone.md"].problem) == ("syncing", "")
+
+
+async def test_hovering_a_link_shows_where_it_goes(delivered):
+    """The label is the session's choice of words; the tooltip is the address."""
+    app = make_app(delivered)
+    async with app.run_test(size=(160, 50)) as pilot:
+        await open_pane(app, pilot)
+        select(app, str(delivered / "notifications" / "2026-09-05_0530_milestone_sweep-closed.md"))
+        await settle(app, pilot)
+        doc = app.screen.query_one("#doc", Markdown)
+        block = next(b for b in doc.query("MarkdownParagraph") if "three charts" in str(b._content))
+        seen = set()
+        for x in range(block.size.width):
+            await pilot.hover(block, offset=(x, 0))
+            seen.add(block.tooltip)
+        assert "attachments/regression-report.pdf" in seen
+        assert None in seen  # and off the link, nothing

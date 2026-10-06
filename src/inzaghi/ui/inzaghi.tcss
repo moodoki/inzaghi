@@ -301,3 +301,28 @@ PromptScreen {
 #confirm-detail {
     padding-bottom: 1;
 }
+
+LinkScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#links-box {
+    width: 80;
+    max-width: 90%;
+    height: auto;
+    max-height: 80%;
+    padding: 1 2;
+    border: thick $primary;
+    background: $surface;
+}
+
+#links-question {
+    width: 100%;
+    padding-bottom: 1;
+}
+
+#links-list {
+    height: auto;
+    max-height: 20;
+}
