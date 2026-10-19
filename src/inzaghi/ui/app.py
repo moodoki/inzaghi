@@ -33,6 +33,7 @@ from ..compose import QUICK_ACTIONS, QUICK_BY_KEYWORD, QuickAction, ReadOnlyChan
 from ..config import Config
 from ..model import LOUD_KINDS, Attachment, Snapshot
 from ..state import ReadState
+from . import split
 from .channel_view import ChannelPane
 from .modals import ConfirmScreen
 from .mounting import composed
@@ -59,7 +60,13 @@ PANES = {"h": "left", "j": "down", "k": "up", "l": "right"}
 #: this key be taken out of the chain" -- see ``check_action``.
 CHORDS: dict[str, dict[str, str]] = {
     "g": {"g": "motion('top')", "f": "open_reference"},
-    "window": {key: f"pane('{way}')" for key, way in PANES.items()},
+    "window": {
+        **{key: f"pane('{way}')" for key, way in PANES.items()},
+        # vim's window widths: narrower, wider, and back to even.
+        "<": "split(-1)",
+        ">": "split(1)",
+        "=": "split(0)",
+    },
     "]": {"f": "reference(1)"},
     "[": {"f": "reference(-1)"},
 }
@@ -136,6 +143,9 @@ class InzaghiApp(App):
         Binding("k", "chord('k')", priority=True, show=False),
         Binding("l", "chord('l')", priority=True, show=False),
         Binding("f", "chord('f')", priority=True, show=False),
+        Binding("less_than_sign", "chord('<')", priority=True, show=False),
+        Binding("greater_than_sign", "chord('>')", priority=True, show=False),
+        Binding("equals_sign", "chord('=')", priority=True, show=False),
         # Channels are the only horizontal axis here, so h and l are what the
         # arrows are.
         Binding("l", "next_channel", "Next channel", show=False),
@@ -147,6 +157,8 @@ class InzaghiApp(App):
         self.config = config
         self.channels = channels if channels is not None else config.discover()
         self.state = ReadState.load()
+        #: The timeline column's share of the width, shared by every channel.
+        self.split_percent = split.START_PERCENT
         self.snapshots: dict[str, Snapshot] = {}
         self._pane_ids: dict[str, str] = {}  # channel key -> TabPane id
         # Pane ids are never reused: a removed tab's id must not collide
@@ -655,6 +667,26 @@ class InzaghiApp(App):
     def _current_pane(self) -> ChannelPane | None:
         channel = self.current_channel()
         return self._pane_for(channel.key) if channel else None
+
+    def action_split(self, step: int) -> None:
+        """``ctrl+w <``, ``>`` and ``=``: move the divider, or put it back."""
+        if step == 0:
+            self._set_split(split.START_PERCENT)
+        else:
+            self._set_split(self.split_percent + step * split.STEP_PERCENT)
+
+    def resize_split(self, delta: float) -> None:
+        """A drag on the divider, as a share of the width."""
+        self._set_split(self.split_percent + delta)
+
+    def _set_split(self, percent: float) -> None:
+        """One split for every channel, so changing tab does not move it."""
+        clamped = split.clamp(percent)
+        if clamped == self.split_percent:
+            return
+        self.split_percent = clamped
+        for pane in self.query(ChannelPane):
+            pane.set_split(clamped)
 
     def action_pane(self, direction: str) -> None:
         """Move the keyboard one pane over, within the channel on screen.

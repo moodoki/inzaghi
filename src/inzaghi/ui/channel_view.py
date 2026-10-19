@@ -24,6 +24,7 @@ from .composer import Composer
 from .markup import escape
 from .mounting import composed
 from .preview import Preview
+from .split import Divider
 from .rows import (
     ALL,
     HEALTH_STYLE,
@@ -225,6 +226,7 @@ class ChannelPane(Vertical):
             with Vertical(id="left"):
                 yield Timeline(id=TIMELINE)
                 yield Composer(id="composer")
+            yield Divider(id="split")
             with Vertical(id="reader-column"):
                 with VerticalScroll(id="reader"):
                     # ``open_links=False``: left on, the widget hands every
@@ -252,8 +254,28 @@ class ChannelPane(Vertical):
         self.query_one("#search", Input).display = False
         self.query_one("#find-bar").display = False
         self.query_one(f"#{ATTACHMENTS}", OptionList).display = False
+        self.set_split(getattr(self.app, "split_percent", None))
         if self.snapshot is not None:  # a scan that landed while mounting
             self.update(self.snapshot, self._unread, self.snapshot.scanned_at)
+
+    def set_split(self, percent: int | None) -> None:
+        """Put the divider at ``percent`` of the width, from the left."""
+        if percent is not None:
+            self.query_one("#left").styles.width = f"{percent}%"
+
+    def on_divider_dragged(self, event: Divider.Dragged) -> None:
+        """Turn columns dragged into a share of the width, for the app to apply.
+
+        The app owns the split because every channel shares it; this pane only
+        knows how wide it is.
+        """
+        event.stop()
+        width = self.query_one("#channel-body").size.width
+        if width <= 0:  # mid-layout; the next drag event will land
+            return
+        resize = getattr(self.app, "resize_split", None)
+        if resize is not None:
+            resize(event.columns * 100 / width)
 
     def update(self, snapshot: Snapshot, unread: set[str], now: datetime) -> None:
         """Take a scan, and rebuild only what the scan actually changed.

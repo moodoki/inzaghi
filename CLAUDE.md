@@ -40,6 +40,7 @@ belong in `CLAUDE.local.md`, which is not committed.
                              delivered text file, vim.py what a motion means
                              to the focused pane, find.py the in-document
                              search, links.py what a link may do,
+                             split.py the divider between the columns,
                              mounting.py guards the timed refreshes,
                              volume.py the threads I/O runs on)
 

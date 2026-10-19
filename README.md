@@ -548,6 +548,7 @@ window somebody leaves open beside their editor all day:
 | `ctrl+d` `ctrl+u` | half a screen either way |
 | `h` `l` | the previous and next channel — the only horizontal axis here — same as `←` `→` and `tab` |
 | `ctrl+w` `h` `j` `k` `l` | the pane to the left, below, above, to the right |
+| `ctrl+w` `<` `>` `=` | move the divider between the timeline and the reader left or right, or back to where it started — or drag it |
 | `/` `n` `N` | search, and step the matches — the channel or the document, see below |
 | `]f` `[f` `gf` | the next and previous file this entry delivered, and open it |
 | `i` | write a message, as in insert |
