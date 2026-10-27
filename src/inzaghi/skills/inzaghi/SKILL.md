@@ -129,6 +129,22 @@ sentence** is read: `Nothing.` followed by a paragraph of context is still
 nothing, while a question that opens with the word is read as the answer and
 never flagged.
 
+STATUS.md also says what is running the session, so someone looking across
+channels can tell them apart. Put three keys in its front matter:
+
+```yaml
+harness: claude-code   # or codex, opencode, pi, none (no agent: a script or timer), or a custom agent's name
+provider: azure        # anthropic, openai, azure, bedrock, vertex, local, or a custom endpoint's name
+model: claude-opus-5-5 # the exact id your harness reports
+```
+
+Find them out rather than assume them. In Claude Code, `provider` is
+`bedrock`, `vertex` or `azure` when `CLAUDE_CODE_USE_BEDROCK`,
+`CLAUDE_CODE_USE_VERTEX` or `CLAUDE_CODE_USE_FOUNDRY` is set, a custom
+endpoint when `ANTHROPIC_BASE_URL` points somewhere other than Anthropic,
+and `anthropic` otherwise. Re-check at every rewrite: a session can be
+switched to another provider or model without being restarted.
+
 **`notifications/TASK_OVERVIEW.md`** is progress across the whole project, one
 row per task, for the person who has not looked in three days. Optional, but
 valuable on a project of any size.
@@ -244,7 +260,8 @@ Anything else is a free-form instruction to be read and acted on.
 - Plain UTF-8 Markdown. ISO-8601 timestamps with an offset.
 - Never edit or delete a file in `inbox/` other than by moving it to `done/`.
 - Optionally open any file with a flat YAML front-matter block (`kind`, `ts`,
-  `next_by`, `needs_reply`, and `paused_until` on the heartbeat); it takes
+  `next_by`, `needs_reply`, `paused_until` on the heartbeat, and `harness`,
+  `provider` and `model` on STATUS.md); it takes
   precedence over the filename and prose.
   On the three overwritten files, `ts` is read as the time of that update, so
   it stands in for an `updated:` bullet rather than being ignored beside one.

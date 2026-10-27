@@ -15,7 +15,7 @@ from .channel import Channel, is_channel
 #: Bumped when the text below changes in a way a session should re-read.
 #: Every change so far has been an addition, so a channel still carrying an
 #: older README is not broken by one -- ``inz init --force`` is what rewrites it.
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 CHANNEL_README = """\
 # {name} — unattended-run channel
@@ -42,6 +42,23 @@ Three files are **overwritten** at every wakeup:
   the exact question when something is. Only the first sentence of that section
   is read, so `Nothing.` followed by context is still nothing — and a question
   must not open with the word, or it is read as the answer.
+
+  Say what is on this end of the channel, in three keys, as front matter or
+  as `- **key:** value` bullets:
+
+  * `harness:` what runs the session — `claude-code`, `codex`, `opencode`,
+    `pi`, `none` for a channel written by a script or a timer with no agent
+    behind it, or the name of a custom agent.
+  * `provider:` where the model is served from — `anthropic`, `openai`,
+    `azure`, `bedrock`, `vertex`, `local` for a model running on this
+    network, or the name of a custom endpoint. Say it even when it is the
+    harness's default: the same harness reads very differently on a hosted
+    frontier model and on a local one.
+  * `model:` the exact model id, as the harness reports it.
+
+  Leave out `provider:` and `model:` only when `harness:` is `none`. Check
+  them at every rewrite rather than copying them forward: a session can be
+  switched to another provider or model without being restarted.
 * `HEARTBEAT.md` — liveness, independent of any job, so a dead session is
   visible. Key lines, as bullets:
   `- **updated:** <now>`, `- **next update expected by:** <now + interval>`,
@@ -199,6 +216,8 @@ needs_reply: true
 
 On `HEARTBEAT.md`, `paused_until:` is read the same way as the
 `- **paused until:**` bullet above, and means the same thing.
+On `STATUS.md`, `harness:`, `provider:` and `model:` are read the same way as
+their bullets.
 
 It is entirely optional; a channel that never emits it works the same. On the
 three overwritten files, `ts` is read as the time of that update — the same

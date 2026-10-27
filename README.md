@@ -143,6 +143,13 @@ accepts an optional YAML front-matter block (`kind`, `ts`, `next_by`,
 `needs_reply`) when a session cares to emit one — a channel that never does
 works exactly as well.
 
+`STATUS.md` also says what is on the other end of the channel: `harness`
+(`claude-code`, `codex`, `opencode`, `pi`, `none` for a script or timer with no
+agent, or a custom agent's name), `provider` (where the model is served from —
+`anthropic`, `azure`, `bedrock`, `vertex`, `local`, or a custom endpoint) and
+`model`. The channel's top line shows them, as `Claude Code · Azure ·
+claude-opus-5-5`.
+
 ## Delivered files
 
 A session with something that does not fit in a notification — a report, a
