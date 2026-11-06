@@ -475,6 +475,8 @@ class ChannelPane(Vertical):
         else:
             parts.append("[dim]no heartbeat file[/]")
         parts.extend(_link_note(snapshot, now))
+        if snapshot.status and snapshot.status.session:
+            parts.append(f"[dim]{escape(snapshot.status.session)}[/]")
         if self.channel.read_only:
             parts.append("[dim italic]read-only[/]")
 

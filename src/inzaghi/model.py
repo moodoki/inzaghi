@@ -268,6 +268,30 @@ class Heartbeat:
         return "late"
 
 
+#: How the contract's ``harness:`` values are shown. A value not listed here
+#: is shown as the session wrote it.
+HARNESS_NAMES = {
+    "claude-code": "Claude Code",
+    "claude_code": "Claude Code",
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "opencode": "opencode",
+    "pi": "pi",
+    "none": "no agent",
+    "shell": "no agent",
+}
+
+#: And ``provider:``, where the model is served from.
+PROVIDER_NAMES = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "azure": "Azure",
+    "bedrock": "Bedrock",
+    "vertex": "Vertex AI",
+    "local": "local",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class Status:
     """The overwritten run-state file, plus whether it is asking for you."""
@@ -275,6 +299,15 @@ class Status:
     doc: Doc
     updated: datetime | None
     waiting: str | None
+    #: What is on the other end of the channel, as the session declared it:
+    #: the harness it runs in, whose servers its model is served from, and
+    #: the model. Three channels running the same harness can be three
+    #: different things to read -- a hosted frontier model, the same model
+    #: through a cloud provider's quota, a local one -- and nothing else in
+    #: the folder says which.
+    harness: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
     #: Things a session writes under "Waiting on you" that mean "nothing".
     NOTHING = frozenset({"", "-", "none", "none.", "nothing", "nothing.", "n/a", "na"})
@@ -312,7 +345,40 @@ class Status:
                 waiting = stripped
         if doc.meta.get("needs_reply", "").lower() in {"true", "yes", "1"} and not waiting:
             waiting = section or "(flagged by the session)"
-        return cls(doc=doc, updated=updated, waiting=waiting)
+        # Front matter first, then a bullet: the same precedence every other
+        # key here has, and a session told either form was told correctly.
+        bullets = parse.parse_kv_bullets(doc.body)
+
+        def declared(key: str) -> str | None:
+            value = (doc.meta.get(key) or bullets.get(key) or "").strip().strip("`")
+            return value or None
+
+        return cls(
+            doc=doc,
+            updated=updated,
+            waiting=waiting,
+            harness=declared("harness"),
+            provider=declared("provider"),
+            model=declared("model"),
+        )
+
+    @property
+    def session(self) -> str:
+        """What the session is, in one phrase: ``Claude Code · Azure · <model>``.
+
+        Empty when the session declared nothing. Known names are spelled the
+        way their makers spell them; anything else is shown as written, because
+        the contract invites a custom harness and a self-hosted provider and
+        cannot list them all.
+        """
+        parts = []
+        if self.harness:
+            parts.append(HARNESS_NAMES.get(self.harness.lower(), self.harness))
+        if self.provider:
+            parts.append(PROVIDER_NAMES.get(self.provider.lower(), self.provider))
+        if self.model:
+            parts.append(self.model)
+        return " · ".join(parts)
 
     @property
     def headline(self) -> str:
