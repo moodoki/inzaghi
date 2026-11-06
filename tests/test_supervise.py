@@ -414,6 +414,15 @@ def test_rousing_asks_rather_than_tells(supervised):
     assert "if you were not" in text.lower() and "false positive" in text
 
 
+def test_rousing_leaves_room_for_a_stall_nobody_can_explain(supervised):
+    """Paused or false positive was a binary, and the honest answer can be
+    neither: a session that was alive, never woken, with nothing on record
+    saying why. Offered only two branches, it guesses the first, and the
+    channel records an outage cause that never happened."""
+    text = sup.rousing("northwind").lower()
+    assert "cannot tell why" in text and "do not guess" in text
+
+
 def test_a_stalled_session_is_not_roused_twice_in_the_interval(supervised, tmp_path):
     config, channel = supervised
     pokes = sup.Pokes(tmp_path / "p.json")

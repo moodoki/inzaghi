@@ -285,12 +285,15 @@ def rousing(name: str) -> str:
     """
     return (
         f"{SIGNATURE} nothing has moved in {name}'s session for a while, so "
-        "this is a tap on the shoulder. Check for yourself: if you were paused "
-        "and can run again, carry on where you left off and say so in the "
-        "heartbeat's state: line. If you were not, this was a false positive — "
-        "say that instead, and please tell the Inzaghi session so, because the "
-        "detection is worth fixing and your channel's own record is not the "
-        "place to write something that did not happen."
+        "this is a tap on the shoulder. Check for yourself, and report only "
+        "what you can see. If you were held up by something you can name, "
+        "carry on where you left off and name it in the heartbeat's state: "
+        "line. If you were stopped but cannot tell why — nothing woke you and "
+        "nothing says what happened — carry on and write exactly that; do not "
+        "guess a cause. If you were not stopped at all, this was a false "
+        "positive — say that instead, and please tell the Inzaghi session so, "
+        "because the detection is worth fixing and your channel's own record "
+        "is not the place to write something that did not happen."
     )
 
 
